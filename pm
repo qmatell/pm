@@ -27,6 +27,7 @@ import getpass
 import json
 import os
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -699,6 +700,157 @@ def run_action(func, args_obj) -> int:
         return 1
 
 
+def command_exists(name: str) -> bool:
+    return shutil.which(name) is not None
+
+
+def openclaw_version() -> str:
+    if not command_exists("openclaw"):
+        return ""
+    rc, out = run_cmd(["openclaw", "--version"], check=False)
+    return out.strip() if rc == 0 else ""
+
+
+def latest_openclaw_version() -> str:
+    if not command_exists("npm"):
+        return ""
+    rc, out = run_cmd(["npm", "view", "openclaw", "version"], check=False)
+    return out.strip() if rc == 0 else ""
+
+
+def install_openclaw_official() -> int:
+    print("\n➡️ 使用官方安装脚本安装 OpenClaw...")
+    rc, out = run_cmd(
+        [
+            "bash",
+            "-lc",
+            "curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --no-onboard",
+        ],
+        check=False,
+    )
+    print(out[-1200:] if out else "")
+    return rc
+
+
+def update_openclaw_official() -> int:
+    print("\n➡️ 使用官方安装脚本更新 OpenClaw...")
+    rc, out = run_cmd(
+        ["bash", "-lc", "curl -fsSL https://openclaw.ai/install.sh | bash"],
+        check=False,
+    )
+    print(out[-1200:] if out else "")
+    return rc
+
+
+def uninstall_openclaw() -> int:
+    if not command_exists("openclaw"):
+        print("ℹ️ 未检测到 openclaw，无需卸载")
+        return 0
+
+    print("\n⚠️ 卸载将移除 OpenClaw CLI 与服务，请谨慎。")
+    if not yes_no("确认继续卸载？", default=False):
+        print("已取消卸载")
+        return 0
+
+    # 优先非交互卸载
+    rc, out = run_cmd(["openclaw", "uninstall", "--all", "--yes", "--non-interactive"], check=False)
+    if rc != 0:
+        print("⚠️ 非交互卸载失败，尝试普通卸载...")
+        rc, out = run_cmd(["openclaw", "uninstall"], check=False)
+    print(out[-1200:] if out else "")
+    return rc
+
+
+def gateway_action(action: str) -> int:
+    if action not in ("status", "start", "stop", "restart"):
+        print("❌ 不支持的操作")
+        return 1
+    if not command_exists("openclaw"):
+        print("❌ 未检测到 openclaw，无法操作 gateway")
+        return 1
+    rc, out = run_cmd(["openclaw", "gateway", action], check=False)
+    print(out.strip())
+    return rc
+
+
+def menu_install_update_status() -> int:
+    while True:
+        clear_screen()
+        cur = openclaw_version()
+        latest = latest_openclaw_version()
+
+        lines = [
+            "__CENTER__:安装更新状态",
+            "__SEP__",
+            f"当前安装: {'是' if cur else '否'}" + (f"（版本: {cur}）" if cur else ""),
+            f"最新版本: {latest if latest else '未知（npm 不可用或网络失败）'}",
+            "__SEP__",
+            "1. 安装/卸载 OpenClaw",
+            "2. 检测更新并可更新",
+            "3. Gateway 启动/停止/重启/状态",
+            "0. 返回主菜单",
+        ]
+        _box_print(lines, width=66)
+
+        c = input("\n请输入编号: ").strip()
+        if c == "0":
+            return 0
+
+        if c == "1":
+            if cur:
+                print(f"✅ 已安装 OpenClaw，版本: {cur}")
+                if yes_no("是否卸载 OpenClaw？", default=False):
+                    rc = uninstall_openclaw()
+                    print("✅ 卸载完成" if rc == 0 else "❌ 卸载失败")
+            else:
+                print("ℹ️ 未安装 OpenClaw")
+                if yes_no("是否使用官方脚本安装？", default=True):
+                    rc = install_openclaw_official()
+                    print("✅ 安装完成" if rc == 0 else "❌ 安装失败")
+            pause_any_key()
+            continue
+
+        if c == "2":
+            if not cur:
+                print("❌ 未安装 OpenClaw，无法更新")
+                pause_any_key()
+                continue
+            if not latest:
+                print("⚠️ 无法获取最新版本（npm 或网络问题）")
+                pause_any_key()
+                continue
+            print(f"当前版本: {cur}")
+            print(f"最新版本: {latest}")
+            if cur == latest:
+                print("✅ 已是最新版本")
+            else:
+                print("⚠️ 检测到新版本")
+                if yes_no("是否立即更新？", default=True):
+                    rc = update_openclaw_official()
+                    print("✅ 更新完成" if rc == 0 else "❌ 更新失败")
+            pause_any_key()
+            continue
+
+        if c == "3":
+            print("\n1. status  2. start  3. stop  4. restart")
+            x = input("请选择操作: ").strip()
+            amap = {"1": "status", "2": "start", "3": "stop", "4": "restart"}
+            act = amap.get(x, "")
+            if not act:
+                print("❌ 无效操作")
+            else:
+                rc = gateway_action(act)
+                if rc == 0:
+                    print("✅ 执行成功")
+                else:
+                    print("❌ 执行失败")
+            pause_any_key()
+            continue
+
+        print("❌ 无效编号")
+        pause_any_key()
+
+
 def _wcs_width(s: str) -> int:
     w = 0
     for ch in str(s):
@@ -768,14 +920,15 @@ def menu_loop() -> int:
             "__SEP__",
             f"__CENTER__:默认模型: {primary}",
             "__SEP__",
-            "1. 列出 provider（list）",
-            "2. 检测 API 可用性（check）",
-            "3. 添加 provider（add）",
-            "4. 同步模型注册（sync）",
-            "5. 切换默认模型（switch）",
-            "6. 查看 provider 模型（models）",
-            "7. 删除 provider（remove）",
-            "8. 安装/修复别名（alias-install）",
+            "1. 安装更新状态",
+            "2. 列出 provider（list）",
+            "3. 检测 API 可用性（check）",
+            "4. 添加 provider（add）",
+            "5. 同步模型注册（sync）",
+            "6. 切换默认模型（switch）",
+            "7. 查看 provider 模型（models）",
+            "8. 删除 provider（remove）",
+            "9. 安装/修复别名（alias-install）",
             "0. 退出",
         ]
         _box_print(lines, width=66)
@@ -789,11 +942,15 @@ def menu_loop() -> int:
             return 0
 
         if choice == "1":
+            menu_install_update_status()
+            continue
+
+        if choice == "2":
             run_action(cmd_list, argparse.Namespace())
             pause_any_key()
             continue
 
-        if choice == "2":
+        if choice == "3":
             timeout = input("超时秒数(默认10): ").strip() or "10"
             ua = input(f"User-Agent(默认 {DEFAULT_UA}): ").strip() or DEFAULT_UA
             run_action(
@@ -803,7 +960,7 @@ def menu_loop() -> int:
             pause_any_key()
             continue
 
-        if choice == "3":
+        if choice == "4":
             validate = yes_no("是否开启 chat 可用性验证(--validate-chat)", default=True)
             prune_hint = "（添加场景无 prune）"
             print(f"validate-chat: {'开' if validate else '关'} {prune_hint}")
@@ -831,7 +988,7 @@ def menu_loop() -> int:
             pause_any_key()
             continue
 
-        if choice == "4":
+        if choice == "5":
             providers = input("要同步的 provider（序号/名称，空=全部）: ").strip()
             validate = yes_no("是否开启 chat 可用性验证(--validate-chat)", default=True)
             prune = False
@@ -856,7 +1013,7 @@ def menu_loop() -> int:
             pause_any_key()
             continue
 
-        if choice == "5":
+        if choice == "6":
             session = yes_no("是否同步切换当前会话模型(--session)", default=True)
             no_restart = yes_no("仅改配置不重启 gateway(--no-restart)", default=False)
             run_action(
@@ -866,20 +1023,20 @@ def menu_loop() -> int:
             pause_any_key()
             continue
 
-        if choice == "6":
+        if choice == "7":
             provider = input("请输入 provider 序号或名称: ").strip()
             run_action(cmd_models, argparse.Namespace(provider=provider))
             pause_any_key()
             continue
 
-        if choice == "7":
+        if choice == "8":
             names = input("要删除的 provider（支持序号/名称，空格分隔）: ").strip()
             no_restart = yes_no("仅改配置不重启 gateway(--no-restart)", default=False)
             run_action(cmd_remove, argparse.Namespace(name="", names=names, no_restart=no_restart))
             pause_any_key()
             continue
 
-        if choice == "8":
+        if choice == "9":
             name = input("别名名称(默认 pm): ").strip() or "pm"
             path = input("安装路径(默认 /usr/local/bin 或 ~/bin): ").strip()
             run_action(cmd_alias, argparse.Namespace(name=name, path=path))
