@@ -32,6 +32,7 @@ import signal
 import subprocess
 import sys
 import time
+import threading
 import unicodedata
 import urllib.request
 import urllib.error
@@ -40,6 +41,13 @@ from typing import Dict, List, Tuple
 CONFIG_PATH = "/root/.openclaw/openclaw.json"
 DEFAULT_UA = "curl/8.5.0"
 THIS_SCRIPT = os.path.abspath(__file__)
+MENU_SEP = "=" * 33
+MENU_STATUS = {
+    "openclaw_ver": "检测中...",
+    "latest_ver": "检测中...",
+    "runtime": "检测中...",
+}
+_MENU_PROBE_STARTED = False
 
 
 def eprint(*args, **kwargs):
@@ -779,18 +787,18 @@ def menu_install_update_status() -> int:
         cur = openclaw_version()
         latest = latest_openclaw_version()
 
-        lines = [
-            "__CENTER__:安装更新状态",
-            "__SEP__",
-            f"当前安装: {'是' if cur else '否'}" + (f"（版本: {cur}）" if cur else ""),
-            f"最新版本: {latest if latest else '未知（npm 不可用或网络失败）'}",
-            "__SEP__",
-            "1. 安装/卸载 OpenClaw",
-            "2. 检测更新并可更新",
-            "3. Gateway 启动/停止/重启/状态",
-            "0. 返回主菜单",
-        ]
-        _box_print(lines, width=66)
+        sep = MENU_SEP
+        print(sep)
+        print("安装更新状态")
+        print(sep)
+        print(f"当前安装: {'是' if cur else '否'}" + (f"（版本: {cur}）" if cur else ""))
+        print(f"最新版本: {latest if latest else '未知（npm 不可用或网络失败）'}")
+        print(sep)
+        print("1. 安装/卸载 OpenClaw")
+        print("2. 检测更新并可更新")
+        print("3. Gateway 启动/停止/重启/状态")
+        print("0. 返回主菜单")
+        print(sep)
 
         c = input("\n请输入编号: ").strip()
         if c == "0":
@@ -849,6 +857,123 @@ def menu_install_update_status() -> int:
 
         print("❌ 无效编号")
         pause_any_key()
+
+
+def gateway_runtime_status_text() -> str:
+    if not command_exists("openclaw"):
+        return "未安装"
+
+    rc, out = run_cmd(["openclaw", "gateway", "status"], check=False)
+    txt = (out or "").lower()
+
+    if rc == 0:
+        if ("running" in txt) or ("active" in txt) or ("已运行" in out):
+            return "运行中"
+        if ("not running" in txt) or ("stopped" in txt) or ("inactive" in txt) or ("未运行" in out):
+            return "未运行"
+        return "正常"
+
+    if ("not running" in txt) or ("stopped" in txt) or ("inactive" in txt) or ("未运行" in out):
+        return "未运行"
+    return "异常"
+
+
+def refresh_menu_status_once():
+    try:
+        cur = openclaw_version()
+        latest = latest_openclaw_version()
+        runtime = gateway_runtime_status_text()
+        MENU_STATUS["openclaw_ver"] = cur or "未安装"
+        MENU_STATUS["latest_ver"] = latest or "未知"
+        MENU_STATUS["runtime"] = runtime
+    except Exception:
+        MENU_STATUS["openclaw_ver"] = MENU_STATUS.get("openclaw_ver") or "未知"
+        MENU_STATUS["latest_ver"] = MENU_STATUS.get("latest_ver") or "未知"
+        MENU_STATUS["runtime"] = MENU_STATUS.get("runtime") or "未知"
+
+
+def start_menu_probe_if_needed():
+    global _MENU_PROBE_STARTED
+    if _MENU_PROBE_STARTED:
+        return
+    _MENU_PROBE_STARTED = True
+    t = threading.Thread(target=refresh_menu_status_once, daemon=True)
+    t.start()
+
+
+def menu_refresh_status_blocking():
+    refresh_menu_status_once()
+
+
+def menu_status_signature() -> str:
+    return "|".join(
+        [
+            str(MENU_STATUS.get("openclaw_ver", "")),
+            str(MENU_STATUS.get("latest_ver", "")),
+            str(MENU_STATUS.get("runtime", "")),
+        ]
+    )
+
+
+def read_choice_with_auto_refresh(prompt: str, redraw_func):
+    # 非 TTY 环境回退普通输入
+    if not sys.stdin.isatty():
+        try:
+            return input(prompt).strip()
+        except EOFError:
+            return "0"
+
+    try:
+        import select
+        import termios
+        import tty
+
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        tty.setcbreak(fd)
+        buf = ""
+        last_sig = menu_status_signature()
+
+        sys.stdout.write(prompt)
+        sys.stdout.flush()
+
+        while True:
+            r, _, _ = select.select([sys.stdin], [], [], 0.2)
+
+            # 状态变化时自动重绘（仅在还未输入字符时，避免影响输入体验）
+            sig = menu_status_signature()
+            if sig != last_sig and not buf:
+                last_sig = sig
+                redraw_func()
+                sys.stdout.write("\n" + prompt)
+                sys.stdout.flush()
+
+            if r:
+                ch = sys.stdin.read(1)
+                if ch in ("\n", "\r"):
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
+                    return buf.strip()
+                if ch in ("\x7f", "\b"):
+                    if buf:
+                        buf = buf[:-1]
+                        sys.stdout.write("\b \b")
+                        sys.stdout.flush()
+                    continue
+                if ch and ch.isprintable():
+                    buf += ch
+                    sys.stdout.write(ch)
+                    sys.stdout.flush()
+    except Exception:
+        try:
+            return input(prompt).strip()
+        except EOFError:
+            return "0"
+    finally:
+        try:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        except Exception:
+            pass
 
 
 def _wcs_width(s: str) -> int:
@@ -911,36 +1036,37 @@ def _box_print(lines: List[str], width: int = 62):
 
 
 def menu_loop() -> int:
-    while True:
+    start_menu_probe_if_needed()
+
+    def draw_main():
         clear_screen()
         primary = get_primary_model()
-
-        lines = [
-            "__CENTER__:OpenClaw Provider Manager",
-            "__SEP__",
-            f"__CENTER__:默认模型: {primary}",
-            "__SEP__",
-            "1. 安装更新状态",
-            "2. 列出 provider（list）",
-            "3. 检测 API 可用性（check）",
-            "4. 添加 provider（add）",
-            "5. 同步模型注册（sync）",
-            "6. 切换默认模型（switch）",
-            "7. 查看 provider 模型（models）",
-            "8. 删除 provider（remove）",
-            "9. 安装/修复别名（alias-install）",
-            "0. 退出",
-        ]
-        _box_print(lines, width=66)
+        sep = MENU_SEP
+        print(sep)
+        print("OpenClaw Provider Manager")
+        print(sep)
+        print(f"默认模型: {primary}")
+        print(f"OpenClaw版本: {MENU_STATUS.get('openclaw_ver', '检测中...')}")
+        print(f"最新版本: {MENU_STATUS.get('latest_ver', '检测中...')}")
+        print(f"运行状态: {MENU_STATUS.get('runtime', '检测中...')}")
+        print(sep)
+        print("1. 安装更新状态")
+        print("2. 列出 provider（list）")
+        print("3. 检测 API 可用性（check）")
+        print("4. 添加 provider（add）")
+        print("5. 同步模型注册（sync）")
+        print("6. 切换默认模型（switch）")
+        print("7. 查看 provider 模型（models）")
+        print("8. 删除 provider（remove）")
+        print("9. 安装/修复别名（alias-install）")
+        print("0. 退出")
+        print(sep)
         print("提示：命令行帮助请用 pm --cli-help")
 
-        choice = input("\n请输入编号: ").strip()
+    while True:
+        draw_main()
+        choice = read_choice_with_auto_refresh("\n请输入编号: ", draw_main)
         print()
-
-        if choice == "0":
-            print("👋 已退出 PM")
-            return 0
-
         if choice == "1":
             menu_install_update_status()
             continue
