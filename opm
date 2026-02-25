@@ -4,13 +4,13 @@
 OpenClaw Manager
 
 功能：
-1) 检测 API 是否可用（check）
-2) 添加 provider 并自动注册该 provider 的全部模型（add）
-3) 删除 provider（支持批量/序号/空格分隔）并清理已注册模型（remove）
-4) 同步 provider 的模型到 agents.defaults.models（sync，可选单个/多选，空格分隔）
-5) 列出当前 provider（list，带序号），以及单个 provider 模型列表（models）
-6) 快速切换默认模型（switch：按 provider+模型序号/名称）
-7) 安装/自定义别名（alias-install，默认别名 opm）
+1. 检测 API 是否可用（check）
+2. 添加 provider 并自动注册该 provider 的全部模型（add）
+3. 删除 provider（支持批量/序号/空格分隔）并清理已注册模型（remove）
+4. 同步 provider 的模型到 agents.defaults.models（sync，可选单个/多选，空格分隔）
+5. 列出当前 provider（list，带序号），以及单个 provider 模型列表（models）
+6. 快速切换默认模型（switch：按 provider+模型序号/名称）
+7. 安装/自定义别名（alias-install，默认别名 opm）
 
 示例：
   python3 provider_manager.py check --base-url https://api.xxx.com/v1 --api-key sk-xxx
@@ -312,13 +312,13 @@ def cmd_check(args):
 
     # 交互式输入：支持直接执行 `opm check`
     if not base_url:
-        base_url = input("请输入 base-url (例如 https://api.xxx.com/v1，输入0取消): ").strip()
-        if base_url == "0":
+        base_url = input("请输入 base-url (例如 https://api.xxx.com/v1，输入q取消): ").strip()
+        if base_url.lower() == "q":
             print("已取消")
             return 0
     if not api_key:
-        api_key = getpass.getpass("请输入 api-key（输入0取消）: ").strip()
-        if api_key == "0":
+        api_key = getpass.getpass("请输入 api-key（输入q取消）: ").strip()
+        if api_key.lower() == "q":
             print("已取消")
             return 0
 
@@ -339,8 +339,8 @@ def cmd_check(args):
 def cmd_add(args):
     provider = (args.name or "").strip()
     if not provider:
-        provider = input("请输入 provider 名称 (例如 myprovider，输入0取消): ").strip()
-    if provider == "0":
+        provider = input("请输入 provider 名称 (例如 myprovider，输入q取消): ").strip()
+    if provider.lower() == "q":
         print("已取消")
         return 0
     if not provider:
@@ -348,16 +348,16 @@ def cmd_add(args):
 
     base_url = (args.base_url or "").strip()
     if not base_url:
-        base_url = input("请输入 base-url (例如 https://api.xxx.com/v1，输入0取消): ").strip()
-    if base_url == "0":
+        base_url = input("请输入 base-url (例如 https://api.xxx.com/v1，输入q取消): ").strip()
+    if base_url.lower() == "q":
         print("已取消")
         return 0
     base_url = normalize_base_url(base_url)
 
     api_key = (args.api_key or "").strip()
     if not api_key:
-        api_key = getpass.getpass("请输入 api-key（输入0取消）: ").strip()
-    if api_key == "0":
+        api_key = getpass.getpass("请输入 api-key（输入q取消）: ").strip()
+    if api_key.lower() == "q":
         print("已取消")
         return 0
 
@@ -564,10 +564,10 @@ def cmd_switch(args):
         for i, n in enumerate(names_sorted, 1):
             print(f"{i}. {n}")
         try:
-            inp = input("provider（输入0取消）: ").strip()
+            inp = input("provider（输入q取消）: ").strip()
         except EOFError:
             return 1
-        if inp == "0":
+        if inp.lower() == "q":
             print("已取消")
             return 0
         sel = parse_selection(inp, names_sorted)
@@ -600,10 +600,10 @@ def cmd_switch(args):
             mid_cur = m.get("id") if isinstance(m, dict) else str(m)
             print(f"{i}. {mid_cur}")
         try:
-            inp = input("模型序号或名称（空回车默认第1个，输入0取消）: ").strip()
+            inp = input("模型序号或名称（空回车默认第1个，输入q取消）: ").strip()
         except EOFError:
             return 1
-        if inp == "0":
+        if inp.lower() == "q":
             print("已取消")
             return 0
         if not inp:
@@ -756,7 +756,7 @@ def yes_no(prompt: str, default: bool = False) -> bool:
             return default
         if not s:
             return default
-        if s == "0":
+        if s in ("q", "Q"):
             return default
         if s in ("y", "yes", "1", "true"):
             return True
@@ -777,7 +777,7 @@ def prompt_text(prompt: str, default: str = "", allow_zero_cancel: bool = False)
         s = input(prompt).strip()
     except EOFError:
         return None if allow_zero_cancel else default
-    if allow_zero_cancel and s == "0":
+    if allow_zero_cancel and s.lower() == "q":
         return None
     if not s:
         return default
@@ -1103,6 +1103,41 @@ def openclaw_doctor_fix() -> int:
     return rc
 
 
+def cmd_oc_install(_args):
+    return install_openclaw_official()
+
+
+def cmd_oc_start(_args):
+    return gateway_action("start")
+
+
+def cmd_oc_stop(_args):
+    return gateway_action("stop")
+
+
+def cmd_oc_restart(_args):
+    return gateway_action("restart")
+
+
+def cmd_oc_status(_args):
+    return gateway_action("status")
+
+
+def cmd_oc_check_update(args):
+    msg = check_openclaw_update_message(timeout_sec=getattr(args, "timeout", 8))
+    print(msg)
+    return 0 if msg.startswith("✅") or msg.startswith("⚠️") else 1
+
+
+def cmd_oc_uninstall(_args):
+    return uninstall_openclaw()
+
+
+def cmd_oc_doctor(_args):
+    return openclaw_doctor_fix()
+
+
+
 
 def gateway_action(action: str) -> int:
     if action not in ("status", "start", "stop", "restart"):
@@ -1175,15 +1210,15 @@ def menu_install_update_status() -> int:
         print("2. 启动")
         print("3. 停止")
         print("4. 重启")
-        print("5. 状态日志查看")
+        print("5. 状态日志")
         print("6. 检测更新")
         print("7. 卸载")
-        print("8. 健康检测/修复")
-        print("0. 返回主菜单")
+        print("8. 检测/修复")
+        print("q. 返回主菜单")
         print(sep)
 
         c = input("\n请输入编号: ").strip().lower()
-        if c == "0":
+        if c.lower() == "q":
             return 0
 
         if c == "1":
@@ -1468,11 +1503,11 @@ def menu_self_update_uninstall() -> int:
         print("1. 重新检测更新")
         print("2. 更新本脚本")
         print("3. 卸载本脚本（含 __pycache__）")
-        print("0. 返回主菜单")
+        print("q. 返回主菜单")
         print(MENU_SEP)
 
         c = input("\n请输入编号: ").strip()
-        if c == "0":
+        if c.lower() == "q":
             return 0
 
         if c == "1":
@@ -1524,17 +1559,17 @@ def menu_loop() -> int:
         print("7. 查看 provider 模型（models）")
         print("8. 删除 provider（remove）")
         print("9. 安装/修复别名（alias-install）")
-        print("0. 退出")
-        print("00. 更新/卸载（本脚本）")
+        print("q. 退出")
+        print("qq. 更新/卸载（opm脚本）")
         print(sep)
-        print("提示：命令行帮助请用 opm --cli-help")
+        print("提示：命令行帮助用 opm --cli-help；返回用 q")
 
     while True:
         draw_main()
         choice = input("\n请输入编号: ").strip()
         print()
 
-        if choice == "0":
+        if choice.lower() == "q":
             print("👋 已退出 OPM")
             return 0
 
@@ -1554,10 +1589,10 @@ def menu_loop() -> int:
             continue
 
         if choice == "3":
-            timeout = prompt_text("超时秒数(默认10，输入0返回): ", "10", allow_zero_cancel=True)
+            timeout = prompt_text("超时秒数(默认10，输入q返回): ", "10", allow_zero_cancel=True)
             if timeout is None:
                 continue
-            ua = prompt_text(f"User-Agent(默认 {DEFAULT_UA}，输入0返回): ", DEFAULT_UA, allow_zero_cancel=True)
+            ua = prompt_text(f"User-Agent(默认 {DEFAULT_UA}，输入q返回): ", DEFAULT_UA, allow_zero_cancel=True)
             if ua is None:
                 continue
             run_action(
@@ -1571,13 +1606,13 @@ def menu_loop() -> int:
             validate = yes_no("是否开启 chat 可用性验证(--validate-chat)", default=True)
             prune_hint = "（添加场景无 prune）"
             print(f"validate-chat: {'开' if validate else '关'} {prune_hint}")
-            timeout = prompt_text("超时秒数(默认10，输入0返回): ", "10", allow_zero_cancel=True)
+            timeout = prompt_text("超时秒数(默认10，输入q返回): ", "10", allow_zero_cancel=True)
             if timeout is None:
                 continue
             max_probe = prompt_text("max-probe(0=全量，输入0继续；若要返回请输入 q): ", "0", allow_zero_cancel=False)
             if str(max_probe).lower() == "q":
                 continue
-            ua = prompt_text(f"User-Agent(默认 {DEFAULT_UA}，输入0返回): ", DEFAULT_UA, allow_zero_cancel=True)
+            ua = prompt_text(f"User-Agent(默认 {DEFAULT_UA}，输入q返回): ", DEFAULT_UA, allow_zero_cancel=True)
             if ua is None:
                 continue
             no_restart = yes_no("仅改配置不重启 gateway(--no-restart)", default=False)
@@ -1604,18 +1639,18 @@ def menu_loop() -> int:
         if choice == "5":
             print("当前 provider 列表：")
             run_action(cmd_list, argparse.Namespace())
-            providers = prompt_text("要同步的 provider（序号/名称，空=全部，输入0返回）: ", "", allow_zero_cancel=True)
+            providers = prompt_text("要同步的 provider（序号/名称，空=全部，输入q返回）: ", "", allow_zero_cancel=True)
             if providers is None:
                 continue
             validate = yes_no("是否开启 chat 可用性验证(--validate-chat)", default=True)
             prune = False
             if validate:
                 prune = yes_no("是否清理失效模型(--prune)", default=True)
-            timeout = prompt_text("超时秒数(默认10，输入0返回): ", "10", allow_zero_cancel=True)
+            timeout = prompt_text("超时秒数(默认10，输入q返回): ", "10", allow_zero_cancel=True)
             if timeout is None:
                 continue
             max_probe = prompt_text("max-probe(0=全量): ", "0", allow_zero_cancel=False)
-            ua = prompt_text(f"User-Agent(默认 {DEFAULT_UA}，输入0返回): ", DEFAULT_UA, allow_zero_cancel=True)
+            ua = prompt_text(f"User-Agent(默认 {DEFAULT_UA}，输入q返回): ", DEFAULT_UA, allow_zero_cancel=True)
             if ua is None:
                 continue
             no_restart = yes_no("仅改配置不重启 gateway(--no-restart)", default=False)
@@ -1647,7 +1682,7 @@ def menu_loop() -> int:
         if choice == "7":
             print("当前 provider 列表：")
             run_action(cmd_list, argparse.Namespace())
-            provider = prompt_text("请输入 provider 序号或名称（输入0返回）: ", "", allow_zero_cancel=True)
+            provider = prompt_text("请输入 provider 序号或名称（输入q返回）: ", "", allow_zero_cancel=True)
             if provider is None:
                 continue
             run_action(cmd_models, argparse.Namespace(provider=provider))
@@ -1657,7 +1692,7 @@ def menu_loop() -> int:
         if choice == "8":
             print("当前 provider 列表：")
             run_action(cmd_list, argparse.Namespace())
-            names = prompt_text("要删除的 provider（序号/名称，空格分隔，输入0返回）: ", "", allow_zero_cancel=True)
+            names = prompt_text("要删除的 provider（序号/名称，空格分隔，输入q返回）: ", "", allow_zero_cancel=True)
             if names is None:
                 continue
             no_restart = yes_no("仅改配置不重启 gateway(--no-restart)", default=False)
@@ -1666,10 +1701,10 @@ def menu_loop() -> int:
             continue
 
         if choice == "9":
-            name = prompt_text("别名名称(默认 opm，输入0返回): ", "opm", allow_zero_cancel=True)
+            name = prompt_text("别名名称(默认 opm，输入q返回): ", "opm", allow_zero_cancel=True)
             if name is None:
                 continue
-            path = prompt_text("安装路径(默认 /usr/local/bin 或 ~/bin，输入0返回): ", "", allow_zero_cancel=True)
+            path = prompt_text("安装路径(默认 /usr/local/bin 或 ~/bin，输入q返回): ", "", allow_zero_cancel=True)
             if path is None:
                 continue
             run_action(cmd_alias, argparse.Namespace(name=name, path=path))
@@ -1686,18 +1721,33 @@ def build_parser():
         formatter_class=argparse.RawTextHelpFormatter,
         epilog=(
             "示例:\n"
+            "  opm check --base-url https://api.xxxx.com/v1 --api-key <key>\n"
             "  opm ad --name demo1 --base-url https://api.xxxx.com/v1 --api-key <key> --validate-chat\n"
             "  opm sy --providers demo2 --validate-chat --prune\n"
             "  opm sw --session\n"
+            "  opm oc-install\n"
+            "  opm oc-start\n"
+            "  opm oc-check-update\n"
             "\n"
             "提示:\n"
-            "  opm 或 opm -h    进入数字菜单主界面\n"
-            "  opm --cli-help  查看本页 CLI 帮助\n"
+            "  opm              进入数字菜单主界面\n"
+            "  opm --cli-help   查看 CLI 总帮助（等价于 --help）\n"
+            "  opm <子命令> -h  查看该命令用法与示例\n"
         ),
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    p_check = sub.add_parser("check", aliases=["ck"], help="检测 API 是否可用（支持交互输入）")
+    p_check = sub.add_parser(
+        "check",
+        aliases=["ck"],
+        help="检测 API 是否可用（支持交互输入）",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  opm check --base-url https://api.xxx.com/v1 --api-key sk-xxxx\n"
+            "  opm ck --timeout 12 --ua curl/8.5.0\n"
+        ),
+    )
     p_check.add_argument("--base-url", default="", help="例如: https://api.xxx.com/v1；不填则交互输入")
     p_check.add_argument("--api-key", default="", help="API Key；不填则交互输入")
     p_check.add_argument("--timeout", type=int, default=10, help="请求超时秒数")
@@ -1730,7 +1780,17 @@ def build_parser():
     p_add.add_argument("--no-restart", action="store_true", help="仅改配置，不重启 gateway")
     p_add.set_defaults(func=cmd_add)
 
-    p_rm = sub.add_parser("remove", aliases=["rm"], help="删除 provider 并清理已注册模型（支持批量/序号）")
+    p_rm = sub.add_parser(
+        "remove",
+        aliases=["rm"],
+        help="删除 provider 并清理已注册模型（支持批量/序号）",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  opm remove --name demo1\n"
+            "  opm rm --names 1 3 demo2\n"
+        ),
+    )
     p_rm.add_argument("--name", help="单个 provider 名称或序号（可留空，优先 names）", default="")
     p_rm.add_argument("--names", help="批量删除，支持序号/名称，空格分隔，例如 1 3 myprovider", default="")
     p_rm.add_argument("--no-restart", action="store_true", help="仅改配置，不重启 gateway")
@@ -1757,35 +1817,169 @@ def build_parser():
     p_sync.add_argument("--no-restart", action="store_true", help="仅改配置，不重启 gateway")
     p_sync.set_defaults(func=cmd_sync)
 
-    p_list = sub.add_parser("list", aliases=["ls"], help="列出 provider 与注册状态（带序号）")
+    p_list = sub.add_parser(
+        "list",
+        aliases=["ls"],
+        help="列出 provider 与注册状态（带序号）",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  opm list\n"
+            "  opm ls\n"
+        ),
+    )
     p_list.set_defaults(func=cmd_list)
 
-    p_models = sub.add_parser("models", aliases=["md"], help="列出某个 provider 的模型（带序号）")
+    p_models = sub.add_parser(
+        "models",
+        aliases=["md"],
+        help="列出某个 provider 的模型（带序号）",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  opm models --provider demo1\n"
+            "  opm md --provider 1\n"
+        ),
+    )
     p_models.add_argument("--provider", required=True, help="provider 序号或名称")
     p_models.set_defaults(func=cmd_models)
 
-    p_switch = sub.add_parser("switch", aliases=["sw"], help="切换默认模型：provider + 模型序号/名称")
+    p_switch = sub.add_parser(
+        "switch",
+        aliases=["sw"],
+        help="切换默认模型：provider + 模型序号/名称",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  opm switch --provider demo1 --model gpt-4o-mini\n"
+            "  opm sw --provider 1 --model 2 --session\n"
+        ),
+    )
     p_switch.add_argument("--provider", default="", help="provider 序号或名称；不填则交互选择")
     p_switch.add_argument("--model", default="", help="模型序号或模型 id，空则取该 provider 第一个")
     p_switch.add_argument("--session", action="store_true", help="同步切换当前会话模型（/model <provider/model>）")
     p_switch.add_argument("--no-restart", action="store_true", help="仅改配置，不重启 gateway")
     p_switch.set_defaults(func=cmd_switch)
 
-    p_alias = sub.add_parser("alias-install", aliases=["ai"], help="安装命令别名（软链接），默认 opm")
+    p_alias = sub.add_parser(
+        "alias-install",
+        aliases=["ai"],
+        help="安装命令别名（软链接），默认 opm",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  opm alias-install --name opm\n"
+            "  opm ai --name opm --path /usr/local/bin\n"
+        ),
+    )
     p_alias.add_argument("--name", default="opm", help="别名名称，默认 opm")
     p_alias.add_argument("--path", default="", help="可选：指定安装路径（默认为 /usr/local/bin，失败则 ~/bin）")
     p_alias.set_defaults(func=cmd_alias)
+
+
+
+    # openclaw设置（非交互命令）
+    p_oc_install = sub.add_parser(
+        "oc-install",
+        help="安装 OpenClaw",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  opm oc-install\n"
+        ),
+    )
+    p_oc_install.set_defaults(func=cmd_oc_install)
+
+    p_oc_start = sub.add_parser(
+        "oc-start",
+        help="启动 gateway",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  opm oc-start\n"
+        ),
+    )
+    p_oc_start.set_defaults(func=cmd_oc_start)
+
+    p_oc_stop = sub.add_parser(
+        "oc-stop",
+        help="停止 gateway",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  opm oc-stop\n"
+        ),
+    )
+    p_oc_stop.set_defaults(func=cmd_oc_stop)
+
+    p_oc_restart = sub.add_parser(
+        "oc-restart",
+        help="重启 gateway",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  opm oc-restart\n"
+        ),
+    )
+    p_oc_restart.set_defaults(func=cmd_oc_restart)
+
+    p_oc_status = sub.add_parser(
+        "oc-status",
+        help="日志查看",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  opm oc-status\n"
+        ),
+    )
+    p_oc_status.set_defaults(func=cmd_oc_status)
+
+    p_oc_check = sub.add_parser(
+        "oc-check-update",
+        help="检测 OpenClaw 更新",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  opm oc-check-update\n"
+            "  opm oc-check-update --timeout 12\n"
+        ),
+    )
+    p_oc_check.add_argument("--timeout", type=int, default=8, help="检测超时秒数，默认8")
+    p_oc_check.set_defaults(func=cmd_oc_check_update)
+
+    p_oc_uninstall = sub.add_parser(
+        "oc-uninstall",
+        help="卸载 OpenClaw",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  opm oc-uninstall\n"
+        ),
+    )
+    p_oc_uninstall.set_defaults(func=cmd_oc_uninstall)
+
+    p_oc_doctor = sub.add_parser(
+        "oc-doctor",
+        help="检测/修复",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  opm oc-doctor\n"
+        ),
+    )
+    p_oc_doctor.set_defaults(func=cmd_oc_doctor)
 
     return p
 
 
 def main():
-    # 交互主界面：opm -h 进入主菜单
     argv = sys.argv[1:]
-    if not argv or "-h" in argv or "--help" in argv:
+
+    # 无参数：进入数字菜单
+    if not argv:
         return menu_loop()
 
-    # 需要查看传统 CLI 帮助时使用 --cli-help
+    # 非交互 CLI 帮助（总帮助）
     if "--cli-help" in argv:
         argv = [x for x in argv if x != "--cli-help"] + ["--help"]
 
@@ -1797,7 +1991,7 @@ def main():
         print("\n👋 已退出 OPM")
         return 130
     except SystemExit as e:
-        # argparse 的正常退出（例如 --help）
+        # argparse 的正常退出（例如 --help / 子命令 -h）
         return int(e.code) if isinstance(e.code, int) else 0
     except Exception as e:
         eprint(f"❌ 执行失败: {e}")
