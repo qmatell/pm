@@ -1004,46 +1004,104 @@ def get_install_status(force: bool = False, probe_latest: bool = False) -> Dict[
 
 
 def install_openclaw_official() -> int:
-    print("\n➡️ 使用官方安装脚本安装 OpenClaw...")
-    rc, out = run_cmd(
-        [
-            "bash",
-            "-lc",
-            "curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --no-onboard",
-        ],
-        check=False,
-    )
-    print(out[-1200:] if out else "")
-    return rc
+    """
+    安装流程（精简版）：
+    npm install -g openclaw@latest
+    openclaw onboard --install-daemon
+    gateway stop + start
+    """
+    if not command_exists("npm"):
+        print("❌ 未检测到 npm，无法安装 OpenClaw")
+        return 1
+
+    print("\n➡️ 开始安装 OpenClaw...")
+    rc1, out1 = run_cmd(["npm", "install", "-g", "openclaw@latest"], check=False)
+    print((out1 or "")[-1200:])
+    if rc1 != 0:
+        return rc1
+
+    rc2, out2 = run_cmd(["openclaw", "onboard", "--install-daemon"], check=False)
+    print((out2 or "")[-1200:])
+
+    # start_gateway 
+    gateway_action("start")
+    return 0 if rc2 == 0 else rc2
+
+
+def check_openclaw_update_message(timeout_sec: int = 8) -> str:
+    """检测: npm list + npm view 比较版本，只做检测提示。"""
+    if not command_exists("npm"):
+        return "❌ 未检测到 npm，无法检测更新"
+
+    local_ver = openclaw_version()
+    if not local_ver:
+        return "❌ 未检测到本地 OpenClaw 版本"
+
+    remote_ver = latest_openclaw_version(timeout_sec=timeout_sec)
+    if not remote_ver:
+        return "⚠️ 无法获取远端版本（网络或 npm 问题）"
+
+    if local_ver != remote_ver:
+        return f"⚠️ 检测到新版本：{remote_ver}（当前：{local_ver}）"
+    return f"✅ 当前已是最新版本：{local_ver}"
 
 
 def update_openclaw_official() -> int:
-    print("\n➡️ 使用官方安装脚本更新 OpenClaw...")
-    rc, out = run_cmd(
-        ["bash", "-lc", "curl -fsSL https://openclaw.ai/install.sh | bash"],
-        check=False,
-    )
-    print(out[-1200:] if out else "")
-    return rc
+    # 保留函数名兼容其他调用，更新方式
+    if not command_exists("npm"):
+        print("❌ 未检测到 npm，无法更新 OpenClaw")
+        return 1
+
+    print("\n➡️ 开始更新 OpenClaw...")
+    rc1, out1 = run_cmd(["npm", "install", "-g", "openclaw@latest"], check=False)
+    print((out1 or "")[-1200:])
+    if rc1 != 0:
+        return rc1
+
+    rc2, out2 = run_cmd(["openclaw", "onboard", "--install-daemon"], check=False)
+    print((out2 or "")[-1200:])
+
+    gateway_action("start")
+    return 0 if rc2 == 0 else rc2
 
 
 def uninstall_openclaw() -> int:
-    if not command_exists("openclaw"):
-        print("ℹ️ 未检测到 openclaw，无需卸载")
-        return 0
-
+    """卸载核心命令：openclaw uninstall + npm uninstall -g openclaw"""
     print("\n⚠️ 卸载将移除 OpenClaw CLI 与服务，请谨慎。")
     if not yes_no("确认继续卸载？", default=False):
         print("已取消卸载")
         return 0
 
-    # 优先非交互卸载
-    rc, out = run_cmd(["openclaw", "uninstall", "--all", "--yes", "--non-interactive"], check=False)
-    if rc != 0:
-        print("⚠️ 非交互卸载失败，尝试普通卸载...")
-        rc, out = run_cmd(["openclaw", "uninstall"], check=False)
-    print(out[-1200:] if out else "")
+    rc_final = 0
+
+    if command_exists("openclaw"):
+        rc1, out1 = run_cmd(["openclaw", "uninstall"], check=False)
+        print((out1 or "")[-1200:])
+        if rc1 != 0:
+            rc_final = rc1
+    else:
+        print("ℹ️ 未检测到 openclaw 命令，跳过 openclaw uninstall")
+
+    if command_exists("npm"):
+        rc2, out2 = run_cmd(["npm", "uninstall", "-g", "openclaw"], check=False)
+        print((out2 or "")[-1200:])
+        if rc2 != 0:
+            rc_final = rc2
+    else:
+        print("ℹ️ 未检测到 npm，跳过 npm uninstall -g openclaw")
+
+    return rc_final
+
+
+def openclaw_doctor_fix() -> int:
+    """检测修复：openclaw doctor --fix"""
+    if not command_exists("openclaw"):
+        print("❌ 未检测到 openclaw，无法执行健康检测")
+        return 1
+    rc, out = run_cmd(["openclaw", "doctor", "--fix"], check=False)
+    print((out or "").strip())
     return rc
+
 
 
 def gateway_action(action: str) -> int:
@@ -1054,11 +1112,13 @@ def gateway_action(action: str) -> int:
         print("❌ 未检测到 openclaw，无法操作 gateway")
         return 1
 
-    # 对齐：
-    # - start: 先 stop 再 start（避免残留状态导致启动异常）
-    # - stop: 先尝试清理 tmux 会话，再执行 openclaw gateway stop
+    # 主要 ：
+    # - start: 先 stop 再 start，并 sleep 3 秒
+    # - stop: 先尝试清理 tmux gateway 会话，再执行 stop
+    # - restart: 等价于 stop + start
+    # - status: 查看状态日志（openclaw status + gateway status + logs）
     if action == "start":
-        rc1, out1 = run_cmd(["openclaw", "gateway", "stop"], check=False, timeout=12)
+        _, out1 = run_cmd(["openclaw", "gateway", "stop"], check=False, timeout=12)
         rc2, out2 = run_cmd(["openclaw", "gateway", "start"], check=False, timeout=12)
         time.sleep(3)
         merged = "\n".join([x.strip() for x in (out1, out2) if x and x.strip()])
@@ -1066,24 +1126,28 @@ def gateway_action(action: str) -> int:
         return 0 if rc2 == 0 else rc2
 
     if action == "stop":
-        # 先清理名为 gateway 的 tmux 会话（若存在）
         run_cmd(["tmux", "kill-session", "-t", "gateway"], check=False, timeout=5)
         rc, out = run_cmd(["openclaw", "gateway", "stop"], check=False, timeout=12)
         print((out or "").strip())
         return rc
 
     if action == "restart":
-        # 风格保持一致：restart 等价于 stop + start
-        rc1, out1 = run_cmd(["openclaw", "gateway", "stop"], check=False, timeout=12)
+        _, out1 = run_cmd(["openclaw", "gateway", "stop"], check=False, timeout=12)
         rc2, out2 = run_cmd(["openclaw", "gateway", "start"], check=False, timeout=12)
         time.sleep(3)
         merged = "\n".join([x.strip() for x in (out1, out2) if x and x.strip()])
         print(merged.strip())
         return 0 if rc2 == 0 else rc2
 
-    rc, out = run_cmd(["openclaw", "gateway", action], check=False)
-    print(out.strip())
-    return rc
+    # status / logs
+    rc1, out1 = run_cmd(["openclaw", "status"], check=False, timeout=12)
+    rc2, out2 = run_cmd(["openclaw", "gateway", "status"], check=False, timeout=12)
+    rc3, out3 = run_cmd(["openclaw", "logs"], check=False, timeout=20)
+    show = "\n".join([x.strip() for x in (out1, out2, out3) if x and x.strip()])
+    print(show.strip())
+    return 0 if (rc1 == 0 and rc2 == 0 and rc3 == 0) else (rc3 if rc3 != 0 else (rc2 if rc2 != 0 else rc1))
+
+
 
 
 
@@ -1100,16 +1164,21 @@ def menu_install_update_status() -> int:
 
         sep = MENU_SEP
         print(sep)
-        print("安装更新状态")
+        print("openclaw设置")
         print(sep)
         print(f"默认模型: {primary}")
         print(f"OpenClaw版本: {cur if cur else '未安装'}")
         print(f"最新版本: {latest if latest else '未知（npm 不可用或网络问题）'}")
         print(f"运行状态: {runtime if runtime else '未知'}")
         print(sep)
-        print("1. 安装/卸载 OpenClaw")
-        print("2. 检测更新并可更新")
-        print("3. Gateway 启动/停止/重启/状态")
+        print("1. 安装 OpenClaw")
+        print("2. 启动")
+        print("3. 停止")
+        print("4. 重启")
+        print("5. 状态日志查看")
+        print("6. 检测更新")
+        print("7. 卸载")
+        print("8. 健康检测/修复")
         print("0. 返回主菜单")
         print(sep)
 
@@ -1120,12 +1189,8 @@ def menu_install_update_status() -> int:
         if c == "1":
             if cur:
                 print(f"✅ 已安装 OpenClaw，版本: {cur}")
-                if yes_no("是否卸载 OpenClaw？", default=False):
-                    rc = uninstall_openclaw()
-                    print("✅ 卸载完成" if rc == 0 else "❌ 卸载失败")
             else:
-                print("ℹ️ 未安装 OpenClaw")
-                if yes_no("是否使用官方脚本安装？", default=True):
+                if yes_no("是否按 官网 风格安装 OpenClaw？", default=True):
                     rc = install_openclaw_official()
                     print("✅ 安装完成" if rc == 0 else "❌ 安装失败")
             st = get_install_status(force=True, probe_latest=True)
@@ -1134,45 +1199,60 @@ def menu_install_update_status() -> int:
             continue
 
         if c == "2":
+            rc = gateway_action("start")
+            print("✅ 启动成功" if rc == 0 else "❌ 启动失败")
             st = get_install_status(force=True, probe_latest=True)
-            cur2 = st.get("openclaw_ver", "")
-            latest2 = st.get("latest_ver", "")
-
-            if not cur2:
-                print("❌ 未安装 OpenClaw，无法更新")
-                pause_any_key()
-                continue
-            if not latest2:
-                print("⚠️ 无法获取最新版本（npm 或网络问题）")
-                pause_any_key()
-                continue
-            print(f"当前版本: {cur2}")
-            print(f"最新版本: {latest2}")
-            if cur2 == latest2:
-                print("✅ 已是最新版本")
-            else:
-                print("⚠️ 检测到新版本")
-                if yes_no("是否立即更新？", default=True):
-                    rc = update_openclaw_official()
-                    print("✅ 更新完成" if rc == 0 else "❌ 更新失败")
-                    st = get_install_status(force=True, probe_latest=True)
-                    primary = get_primary_model()
+            primary = get_primary_model()
             pause_any_key()
             continue
 
         if c == "3":
-            print("\n1. status  2. start  3. stop  4. restart")
-            x = input("请选择操作: ").strip()
-            amap = {"1": "status", "2": "start", "3": "stop", "4": "restart"}
-            act = amap.get(x, "")
-            if not act:
-                print("❌ 无效操作")
-            else:
-                rc = gateway_action(act)
-                if rc == 0:
-                    print("✅ 执行成功")
-                else:
-                    print("❌ 执行失败")
+            rc = gateway_action("stop")
+            print("✅ 停止成功" if rc == 0 else "❌ 停止失败")
+            st = get_install_status(force=True, probe_latest=True)
+            primary = get_primary_model()
+            pause_any_key()
+            continue
+
+        if c == "4":
+            rc = gateway_action("restart")
+            print("✅ 重启成功" if rc == 0 else "❌ 重启失败")
+            st = get_install_status(force=True, probe_latest=True)
+            primary = get_primary_model()
+            pause_any_key()
+            continue
+
+        if c == "5":
+            rc = gateway_action("status")
+            print("✅ 状态日志查看成功" if rc == 0 else "❌ 状态日志查看失败")
+            st = get_install_status(force=True, probe_latest=True)
+            primary = get_primary_model()
+            pause_any_key()
+            continue
+
+        if c == "6":
+            msg = check_openclaw_update_message(timeout_sec=8)
+            print(msg)
+            # 保持原能力：如果有新版本可选择更新
+            if msg.startswith("⚠️") and yes_no("是否立即更新到最新版本？", default=True):
+                rc = update_openclaw_official()
+                print("✅ 更新完成" if rc == 0 else "❌ 更新失败")
+            st = get_install_status(force=True, probe_latest=True)
+            primary = get_primary_model()
+            pause_any_key()
+            continue
+
+        if c == "7":
+            rc = uninstall_openclaw()
+            print("✅ 卸载完成" if rc == 0 else "❌ 卸载失败")
+            st = get_install_status(force=True, probe_latest=True)
+            primary = get_primary_model()
+            pause_any_key()
+            continue
+
+        if c == "8":
+            rc = openclaw_doctor_fix()
+            print("✅ 健康检测/修复完成" if rc == 0 else "❌ 健康检测/修复失败")
             st = get_install_status(force=True, probe_latest=True)
             primary = get_primary_model()
             pause_any_key()
@@ -1435,7 +1515,7 @@ def menu_loop() -> int:
         print(sep)
         print("OpenClaw Manager")
         print(sep)
-        print("1. 安装更新状态")
+        print("1. openclaw设置")
         print("2. 列出 provider（list）")
         print("3. 检测 API 可用性（check）")
         print("4. 添加 provider（add）")
