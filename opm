@@ -37,12 +37,16 @@ import re
 import unicodedata
 import urllib.request
 import urllib.error
+import hashlib
 from typing import Dict, List, Tuple
 
 CONFIG_PATH = "/root/.openclaw/openclaw.json"
 DEFAULT_UA = "curl/8.5.0"
 THIS_SCRIPT = os.path.abspath(__file__)
 MENU_SEP = "=" * 33
+SELF_REPO_URL = "https://github.com/qmatell/opm.git"
+SELF_RAW_URL = "https://raw.githubusercontent.com/qmatell/opm/main/opm"
+SELF_COMMIT_API_URL = "https://api.github.com/repos/qmatell/opm/commits/main"
 MENU_STATUS = {
     "openclaw_ver": "检测中...",
     "latest_ver": "检测中...",
@@ -826,6 +830,143 @@ def latest_openclaw_version(timeout_sec: int = 6) -> str:
     return out.strip() if rc == 0 else ""
 
 
+def file_sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            b = f.read(1024 * 1024)
+            if not b:
+                break
+            h.update(b)
+    return h.hexdigest()
+
+
+def fetch_url_text(url: str, timeout: int = 10) -> str:
+    req = urllib.request.Request(url, method="GET")
+    req.add_header("Accept", "application/json, text/plain;q=0.9, */*;q=0.8")
+    req.add_header("User-Agent", "opm-self-update/1.0")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read().decode("utf-8", errors="replace")
+
+
+def fetch_github_main_commit(timeout: int = 8) -> str:
+    try:
+        txt = fetch_url_text(SELF_COMMIT_API_URL, timeout=timeout)
+        obj = json.loads(txt)
+        return str(obj.get("sha") or "")
+    except Exception:
+        return ""
+
+
+def check_self_update_status(timeout: int = 10) -> Dict[str, str]:
+    local_hash = ""
+    remote_hash = ""
+    remote_commit = ""
+    err = ""
+
+    try:
+        local_hash = file_sha256(THIS_SCRIPT)
+    except Exception as e:
+        err = f"本地哈希失败: {e}"
+
+    remote_text = ""
+    try:
+        remote_text = fetch_url_text(SELF_RAW_URL, timeout=timeout)
+        remote_hash = hashlib.sha256(remote_text.encode("utf-8")).hexdigest()
+    except Exception as e:
+        err = f"拉取远端脚本失败: {e}"
+
+    remote_commit = fetch_github_main_commit(timeout=min(timeout, 8))
+
+    has_update = False
+    if local_hash and remote_hash:
+        has_update = local_hash != remote_hash
+
+    return {
+        "repo": SELF_REPO_URL,
+        "local": local_hash,
+        "remote": remote_hash,
+        "remote_commit": remote_commit,
+        "has_update": "yes" if has_update else "no",
+        "error": err,
+        "fetched_text": remote_text,
+    }
+
+
+def update_self_script_from_github(timeout: int = 12) -> int:
+    st = check_self_update_status(timeout=timeout)
+    if st.get("error"):
+        print(f"❌ 更新前检查失败：{st['error']}")
+        return 1
+
+    remote_text = st.get("fetched_text", "")
+    if not remote_text.strip():
+        print("❌ 远端脚本为空，已取消")
+        return 1
+
+    script_dir = os.path.dirname(THIS_SCRIPT)
+    pycache_dir = os.path.join(script_dir, "__pycache__")
+    backup = os.path.join(pycache_dir, os.path.basename(THIS_SCRIPT) + ".bak")
+
+    try:
+        os.makedirs(pycache_dir, exist_ok=True)
+        # 仅保留一个备份：始终覆盖同一路径
+        shutil.copy2(THIS_SCRIPT, backup)
+    except Exception as e:
+        print(f"⚠️ 备份失败（继续尝试更新）：{e}")
+
+    try:
+        with open(THIS_SCRIPT, "w", encoding="utf-8") as f:
+            f.write(remote_text)
+        try:
+            os.chmod(THIS_SCRIPT, 0o755)
+        except Exception:
+            pass
+        print("✅ 脚本已更新")
+        print(f"备份文件: {backup}")
+        return 0
+    except Exception as e:
+        print(f"❌ 写入失败：{e}")
+        return 1
+
+
+def uninstall_self_script() -> int:
+    script_path = THIS_SCRIPT
+    script_dir = os.path.dirname(script_path)
+    pycache_dir = os.path.join(script_dir, "__pycache__")
+
+    print("\n⚠️ 卸载将删除以下内容：")
+    print(f"- 脚本: {script_path}")
+    print(f"- 缓存目录: {pycache_dir}（若存在）")
+    if not yes_no("确认继续卸载？", default=False):
+        print("已取消卸载")
+        return 0
+
+    ok = True
+    try:
+        if os.path.exists(script_path):
+            os.remove(script_path)
+            print("✅ 已删除脚本")
+        else:
+            print("ℹ️ 脚本不存在，跳过")
+    except Exception as e:
+        ok = False
+        print(f"❌ 删除脚本失败：{e}")
+
+    try:
+        if os.path.isdir(pycache_dir):
+            shutil.rmtree(pycache_dir, ignore_errors=False)
+            print("✅ 已删除 __pycache__")
+        else:
+            print("ℹ️ 未发现 __pycache__，跳过")
+    except Exception as e:
+        ok = False
+        print(f"❌ 删除 __pycache__ 失败：{e}")
+
+    return 0 if ok else 1
+
+
+
 def get_cached_install_status() -> Dict[str, str]:
     return {
         "openclaw_ver": INSTALL_STATUS_CACHE.get("openclaw_ver", "") or "",
@@ -1229,6 +1370,64 @@ def _box_print(lines: List[str], width: int = 62):
     print("╚" + "═" * (width - 2) + "╝")
 
 
+def menu_self_update_uninstall() -> int:
+    st = check_self_update_status(timeout=10)
+
+    while True:
+        clear_screen()
+        print(MENU_SEP)
+        print("脚本更新/卸载")
+        print(MENU_SEP)
+        print(f"仓库地址: {SELF_REPO_URL}")
+        if st.get("error"):
+            print(f"检测结果: ❌ {st['error']}")
+        else:
+            upd = "是" if st.get("has_update") == "yes" else "否"
+            print(f"是否有更新: {upd}")
+        print(MENU_SEP)
+        print("1. 重新检测更新")
+        print("2. 更新本脚本")
+        print("3. 卸载本脚本（含 __pycache__）")
+        print("0. 返回主菜单")
+        print(MENU_SEP)
+
+        c = input("\n请输入编号: ").strip()
+        if c == "0":
+            return 0
+
+        if c == "1":
+            st = check_self_update_status(timeout=10)
+            pause_any_key()
+            continue
+
+        if c == "2":
+            if not yes_no("确认从 GitHub 更新当前脚本？", default=True):
+                print("已取消更新")
+                pause_any_key()
+                continue
+            rc = update_self_script_from_github(timeout=12)
+            if rc == 0:
+                print("✅ 更新完成（建议重新运行脚本）")
+            else:
+                print("❌ 更新失败")
+            st = check_self_update_status(timeout=10)
+            pause_any_key()
+            continue
+
+        if c == "3":
+            rc = uninstall_self_script()
+            if rc == 0:
+                print("✅ 卸载完成，程序即将退出")
+                time.sleep(1)
+                return 99
+            print("❌ 卸载失败")
+            pause_any_key()
+            continue
+
+        print("❌ 无效编号")
+        pause_any_key()
+
+
 def menu_loop() -> int:
     def draw_main():
         clear_screen()
@@ -1246,6 +1445,7 @@ def menu_loop() -> int:
         print("8. 删除 provider（remove）")
         print("9. 安装/修复别名（alias-install）")
         print("0. 退出")
+        print("00. 更新/卸载（本脚本）")
         print(sep)
         print("提示：命令行帮助请用 opm --cli-help")
 
@@ -1257,6 +1457,12 @@ def menu_loop() -> int:
         if choice == "0":
             print("👋 已退出 OPM")
             return 0
+
+        if choice == "00":
+            rc = menu_self_update_uninstall()
+            if rc == 99:
+                return 0
+            continue
 
         if choice == "1":
             menu_install_update_status()
