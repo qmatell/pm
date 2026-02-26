@@ -1,5 +1,8 @@
 # openclaw manager 使用说明（README）
-从github上面下载脚本，放到随便一个目录里面，进入该目录，./opm.py就行
+```bash
+curl -L -o opm.py "https://raw.githubusercontent.com/qmatell/opm/refs/heads/main/opm.py"
+```
+./opm.py就行
 ## ⚡ 最短速查（10 秒上手）
 
 ```bash
@@ -279,11 +282,11 @@ opm oc-doctor
 
 - 检测 GitHub 是否有更新
 - 更新当前脚本
-- 卸载当前脚本并删除 `__pycache__`
+- 卸载当前脚本并删除 
 
 备注：
 
-- 更新前会备份旧脚本到同目录 `__pycache__` 下，且仅保留一份覆盖备份。
+- 更新前会备份旧脚本到同目录下，且仅保留一份覆盖备份。
 
 ---
 

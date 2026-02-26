@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 OpenClaw Manager
-v2.0.1
+v2.0.2
+修改备份位置，优化删除 __pycache__逻辑
 功能：
 1. 检测 API 是否可用（check）
 2. 添加 provider 并自动注册该 provider 的全部模型（add）
@@ -1086,12 +1087,10 @@ def update_self_script_from_github(timeout: int = 12) -> int:
         return 1
 
     script_dir = os.path.dirname(THIS_SCRIPT)
-    pycache_dir = os.path.join(script_dir, "__pycache__")
-    backup = os.path.join(pycache_dir, os.path.basename(THIS_SCRIPT) + ".bak")
+    backup = os.path.join(script_dir, os.path.basename(THIS_SCRIPT) + ".bak")
 
     try:
-        os.makedirs(pycache_dir, exist_ok=True)
-        # 仅保留一个备份：始终覆盖同一路径
+        # 仅保留一个备份：始终覆盖同一路径（与主脚本同目录）
         shutil.copy2(THIS_SCRIPT, backup)
     except Exception as e:
         print(f"⚠️ 备份失败（继续尝试更新）：{e}")
@@ -1115,9 +1114,11 @@ def uninstall_self_script() -> int:
     script_path = THIS_SCRIPT
     script_dir = os.path.dirname(script_path)
     pycache_dir = os.path.join(script_dir, "__pycache__")
+    backup_path = script_path + ".bak"
 
     print("\n⚠️ 卸载将删除以下内容：")
     print(f"- 脚本: {script_path}")
+    print(f"- 备份: {backup_path}（若存在）")
     print(f"- 缓存目录: {pycache_dir}（若存在）")
     if not yes_no("确认继续卸载？", default=False):
         print("已取消卸载")
@@ -1133,6 +1134,16 @@ def uninstall_self_script() -> int:
     except Exception as e:
         ok = False
         print(f"❌ 删除脚本失败：{e}")
+
+    try:
+        if os.path.isfile(backup_path):
+            os.remove(backup_path)
+            print("✅ 已删除 .bak 备份")
+        else:
+            print("ℹ️ 未发现 .bak 备份，跳过")
+    except Exception as e:
+        ok = False
+        print(f"❌ 删除 .bak 备份失败：{e}")
 
     try:
         if os.path.isdir(pycache_dir):
@@ -1687,7 +1698,7 @@ def menu_self_update_uninstall() -> int:
         print(MENU_SEP)
         print("1. 重新检测更新")
         print("2. 更新脚本")
-        print("3. 卸载脚本（含 __pycache__）")
+        print("3. 卸载脚本")
         print("q. 返回主菜单")
         print(MENU_SEP)
 
