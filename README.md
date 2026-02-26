@@ -1,4 +1,4 @@
-# provider_manager.py 使用说明（README）
+# openclaw manager 使用说明（README）
 从github上面下载脚本，放到随便一个目录里面，进入该目录，./opm.py就行
 ## ⚡ 最短速查（10 秒上手）
 
