@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 OpenClaw Manager
-
+v2.0.1
 功能：
 1. 检测 API 是否可用（check）
 2. 添加 provider 并自动注册该 provider 的全部模型（add）
@@ -1676,7 +1676,7 @@ def menu_self_update_uninstall() -> int:
     while True:
         clear_screen()
         print(MENU_SEP)
-        print("脚本更新/卸载")
+        print("opm脚本更新/卸载")
         print(MENU_SEP)
         print(f"仓库地址: {SELF_REPO_URL}")
         if st.get("error"):
@@ -1686,8 +1686,8 @@ def menu_self_update_uninstall() -> int:
             print(f"是否有更新: {upd}")
         print(MENU_SEP)
         print("1. 重新检测更新")
-        print("2. 更新本脚本")
-        print("3. 卸载本脚本（含 __pycache__）")
+        print("2. 更新脚本")
+        print("3. 卸载脚本（含 __pycache__）")
         print("q. 返回主菜单")
         print(MENU_SEP)
 
@@ -1745,7 +1745,7 @@ def menu_loop() -> int:
         print("8. 删除 provider（remove）")
         print("9. 安装/修复别名（alias-install）")
         print("q. 退出")
-        print("qq. 更新/卸载（opm脚本）")
+        print("00. 更新/卸载（opm脚本）")
         print(sep)
         print("提示：命令行帮助用 opm --cli-help；返回用 q")
 
