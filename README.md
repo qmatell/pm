@@ -9,7 +9,7 @@
 进入后使用9创建别名，默认是opm，创建别名后任何地方opm都能唤出
 
 # 2) 看 CLI 总帮助
-/opm.py --cli-help
+./opm.py --cli-help
 # 或（已装别名时）
 opm --cli-help
 
@@ -30,7 +30,7 @@ opm oc-check-update | opm oc-doctor | opm oc-uninstall
 
 > 返回/退出统一用 `q`（菜单模式）。
 
-> 文件位置：`/home/script/jiance/provider_manager.py`
+> 文件位置：`./opm.py`
 >
 > 本脚本用于 OpenClaw 的 provider 管理、模型可用性检测、同步注册，以及 OpenClaw/Gateway 运维。
 
@@ -41,9 +41,9 @@ opm oc-check-update | opm oc-doctor | opm oc-uninstall
 脚本提供两种使用模式：
 
 1. **数字菜单模式**（推荐日常使用）
-   - 直接运行：`python3 provider_manager.py`
+   - 直接运行：`python3 opm.py`
 2. **命令行模式（CLI）**
-   - 例如：`python3 provider_manager.py check ...`
+   - 例如：`python3 opm.py check ...`
    - 或你已安装别名后：`opm check ...`
 
 ---
@@ -53,7 +53,7 @@ opm oc-check-update | opm oc-doctor | opm oc-uninstall
 启动方式：
 
 ```bash
-python3 /home/script/jiance/provider_manager.py
+python3 ./opm.py
 ```
 
 主菜单功能：
@@ -100,7 +100,7 @@ q. 返回主菜单
 查看总帮助：
 
 ```bash
-python3 /home/script/jiance/provider_manager.py --cli-help
+python3 ./opm.py --cli-help
 # 或
 opm --cli-help
 ```
