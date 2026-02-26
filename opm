@@ -306,34 +306,112 @@ def parse_selection(sel: str, names: List[str]) -> List[str]:
 
 
 def cmd_check(args):
-    base_url = (args.base_url or "").strip()
-    api_key = (args.api_key or "").strip()
-    ua = args.ua.strip() or DEFAULT_UA
+    base_url = (getattr(args, "base_url", "") or "").strip()
+    api_key = (getattr(args, "api_key", "") or "").strip()
+    ua = (getattr(args, "ua", DEFAULT_UA) or DEFAULT_UA).strip() or DEFAULT_UA
+    timeout = int(getattr(args, "timeout", 10) or 10)
 
-    # 交互式输入：支持直接执行 `opm check`
-    if not base_url:
-        base_url = input("请输入 base-url (例如 https://api.xxx.com/v1，输入q取消): ").strip()
-        if base_url.lower() == "q":
-            print("已取消")
-            return 0
-    if not api_key:
-        api_key = getpass.getpass("请输入 api-key（输入q取消）: ").strip()
-        if api_key.lower() == "q":
-            print("已取消")
-            return 0
+    providers_raw = getattr(args, "providers", "0")
+    if isinstance(providers_raw, list):
+        providers_sel = " ".join(str(x) for x in providers_raw if str(x).strip())
+    else:
+        providers_sel = str(providers_raw or "0")
+    providers_sel = providers_sel.strip()
 
-    ok, status, model_ids, detail = fetch_models(base_url, api_key, args.timeout, ua)
-    if ok:
-        print("✅ API 可用")
+    new_api_mode = bool(getattr(args, "new_api", False))
+
+    def check_one(base_url_x: str, api_key_x: str) -> int:
+        ok, status, model_ids, detail = fetch_models(base_url_x, api_key_x, timeout, ua)
+        if ok:
+            print("✅ API 可用")
+            print(f"HTTP: {status}")
+            print(f"模型数: {len(model_ids)}")
+            for i, m in enumerate(model_ids, 1):
+                print(f"{i}. {m}")
+            return 0
+        print("❌ API 不可用")
         print(f"HTTP: {status}")
-        print(f"模型数: {len(model_ids)}")
-        for i, m in enumerate(model_ids, 1):
-            print(f"{i}. {m}")
-        return 0
-    print("❌ API 不可用")
-    print(f"HTTP: {status}")
-    print(f"详情: {detail[:800]}")
-    return 2
+        print(f"详情: {detail[:800]}")
+        return 2
+
+    # 新 API 检测模式
+    if new_api_mode:
+        if not base_url:
+            base_url = input("请输入 base-url (例如 https://api.xxx.com/v1，输入q取消): ").strip()
+            if base_url.lower() == "q":
+                print("已取消")
+                return 0
+        if not api_key:
+            api_key = getpass.getpass("请输入 api-key（输入q取消）: ").strip()
+            if api_key.lower() == "q":
+                print("已取消")
+                return 0
+        return check_one(base_url, api_key)
+
+    # 兼容：若传了 base-url/api-key 也按单 API 检测
+    if base_url or api_key:
+        if not base_url:
+            base_url = input("请输入 base-url (例如 https://api.xxx.com/v1，输入q取消): ").strip()
+            if base_url.lower() == "q":
+                print("已取消")
+                return 0
+        if not api_key:
+            api_key = getpass.getpass("请输入 api-key（输入q取消）: ").strip()
+            if api_key.lower() == "q":
+                print("已取消")
+                return 0
+        return check_one(base_url, api_key)
+
+    # 默认检测本地已添加 provider 的 API
+    cfg = load_config()
+    names_sorted = get_provider_list(cfg)
+    providers = cfg.get("models", {}).get("providers", {})
+
+    if not names_sorted:
+        print("❌ 未找到已添加的 provider")
+        return 1
+
+    if providers_sel in ("", "0"):
+        targets = names_sorted
+    else:
+        targets = parse_selection(providers_sel, names_sorted)
+        if not targets:
+            print("❌ 未匹配到有效 provider")
+            return 1
+
+    print(f"检测目标 provider 数: {len(targets)}")
+    rc_final = 0
+    ok_count = 0
+    bad_count = 0
+    bad_indices = []
+    for idx, pname in enumerate(targets, 1):
+        pobj = providers.get(pname) or {}
+        p_base = str(pobj.get("baseUrl") or "").strip()
+        p_key = str(pobj.get("apiKey") or "").strip()
+
+        if (not p_base) or (not p_key):
+            print(f"{idx}. ❌ {pname}  配置缺失(baseUrl/apiKey)")
+            rc_final = 2
+            bad_count += 1
+            bad_indices.append(str(idx))
+            continue
+
+        ok, status, model_ids, detail = fetch_models(p_base, p_key, timeout, ua)
+        if ok:
+            print(f"{idx}. ✅ {pname}  HTTP:{status}  模型数:{len(model_ids)}")
+            ok_count += 1
+        else:
+            print(f"{idx}. ❌ {pname}  HTTP:{status}  详情:{(detail or '')[:120]}")
+            rc_final = 2
+            bad_count += 1
+            bad_indices.append(str(idx))
+
+    print(MENU_SEP)
+    print(f"检测结果：可用 {ok_count} 个，不可用 {bad_count} 个")
+    if bad_indices:
+        print(f"不可用序号：{' '.join(bad_indices)}")
+
+    return rc_final
 
 
 def cmd_add(args):
@@ -370,17 +448,15 @@ def cmd_add(args):
         print(f"详情: {detail[:800]}")
         return 2
 
-    # 可选：仅保留 chat/completions 实测可用模型，避免“能列出但调用404”
-    bad_models = []
-    if args.validate_chat:
-        model_ids, bad_models = filter_models_by_chat(
-            base_url, api_key, model_ids, timeout=args.timeout, ua=ua, max_probe=args.max_probe
-        )
-        if bad_models:
-            print(f"⚠️ 已过滤 chat 不可用模型: {len(bad_models)}")
-        if not model_ids:
-            print("❌ 过滤后没有可用模型，取消添加")
-            return 2
+    # 始终仅保留 chat/completions 实测可用模型，避免“能列出但调用404”
+    model_ids, bad_models = filter_models_by_chat(
+        base_url, api_key, model_ids, timeout=args.timeout, ua=ua, max_probe=args.max_probe
+    )
+    if bad_models:
+        print(f"⚠️ 已过滤 chat 不可用模型: {len(bad_models)}")
+    if not model_ids:
+        print("❌ 过滤后没有可用模型，取消添加")
+        return 2
 
     inputs = [x.strip() for x in split_tokens(args.inputs) if x.strip()]
     if not inputs:
@@ -465,49 +541,64 @@ def cmd_sync(args):
         defaults_models = {}
 
     targets = parse_selection(args.providers, names_sorted) if args.providers else names_sorted
+    if not targets:
+        print("❌ 未匹配到要同步的 provider")
+        return 1
+
     added = 0
     removed = 0
+
     for pname in targets:
         pobj = cfg.get("models", {}).get("providers", {}).get(pname) or {}
+        mids = [m.get("id") for m in (pobj.get("models", []) or []) if isinstance(m, dict) and m.get("id")]
 
-        # 可选：先用 chat/completions 验证 provider 模型可用性
-        if args.validate_chat:
-            mids = [m.get("id") for m in (pobj.get("models", []) or []) if isinstance(m, dict) and m.get("id")]
-            ok_ids, bad_ids = filter_models_by_chat(
-                pobj.get("baseUrl", ""),
-                pobj.get("apiKey", ""),
-                mids,
-                timeout=args.timeout,
-                ua=args.ua,
-                max_probe=args.max_probe,
-            )
-            valid_ids = ok_ids
-            if bad_ids:
-                print(f"⚠️ {pname} 过滤不可用模型: {len(bad_ids)}")
-                if args.prune:
-                    bad_keys = {f"{pname}/{x}" for x in bad_ids}
-                    for k in list(defaults_models.keys()):
-                        if k in bad_keys:
-                            defaults_models.pop(k, None)
-                            removed += 1
-        else:
-            valid_ids = [m.get("id") for m in (pobj.get("models", []) or []) if isinstance(m, dict) and m.get("id")]
+        # 始终检测可用性：仅同步可用模型
+        ok_ids, bad_ids = filter_models_by_chat(
+            pobj.get("baseUrl", ""),
+            pobj.get("apiKey", ""),
+            mids,
+            timeout=args.timeout,
+            ua=args.ua,
+            max_probe=args.max_probe,
+        )
 
-        for mid in valid_ids:
+        valid_set = {f"{pname}/{x}" for x in ok_ids}
+
+        # 找出当前 defaults 里该 provider 已注册的模型
+        current_keys = [k for k in list(defaults_models.keys()) if k.startswith(pname + "/")]
+
+        # 1) 移除不可用模型或已不在 provider 模型列表里的旧注册
+        rm_this = 0
+        for k in current_keys:
+            if k not in valid_set:
+                defaults_models.pop(k, None)
+                removed += 1
+                rm_this += 1
+
+        # 2) 添加本次检测可用且未注册的模型
+        add_this = 0
+        for mid in ok_ids:
             key = f"{pname}/{mid}"
             if key not in defaults_models:
                 defaults_models[key] = {}
                 added += 1
+                add_this += 1
+
+        reg_now = len([k for k in defaults_models.keys() if k.startswith(pname + "/")])
+
+        print(
+            f"{pname}: provider模型={len(mids)}, 可用={len(ok_ids)}, 不可用={len(bad_ids)}, "
+            f"新增={add_this}, 移除={rm_this}, 已注册={reg_now}"
+        )
+        if bad_ids:
+            print(f"⚠️ {pname} 不可用模型已移除: {len(bad_ids)}")
 
     config_set("agents.defaults.models", defaults_models)
 
     if not args.no_restart:
         restart_gateway()
 
-    if removed:
-        print(f"✅ 同步完成，新增注册模型: {added}，清理失效模型: {removed}")
-    else:
-        print(f"✅ 同步完成，新增注册模型: {added}")
+    print(f"✅ 同步完成：新增可用模型 {added}，移除不可用/失效模型 {removed}")
     return 0
 
 
@@ -531,22 +622,85 @@ def cmd_list(_args):
 def cmd_models(args):
     cfg = load_config()
     names_sorted = get_provider_list(cfg)
-    selected = parse_selection(args.provider, names_sorted)
-    pname = selected[0] if selected else (args.provider.strip() if args.provider else "")
-    if not pname:
-        print("❌ 需要 --provider 指定（序号或名称）")
-        return 1
     providers = cfg.get("models", {}).get("providers", {})
-    pobj = providers.get(pname)
-    if not pobj:
-        print(f"❌ provider 不存在: {pname}")
+
+    if not args.provider:
+        print("❌ 需要 --provider 指定（可用序号/名称，支持空格分隔多个）")
         return 1
-    models = pobj.get("models", []) or []
-    print(f"provider: {pname}, 模型数: {len(models)}")
-    for i, m in enumerate(models, 1):
-        mid = m.get("id") if isinstance(m, dict) else str(m)
-        print(f"{i}. {mid}")
-    return 0
+
+    selected = parse_selection(args.provider, names_sorted)
+    if not selected:
+        # 兼容单个直接名称
+        raw = [x.strip() for x in split_tokens(args.provider) if x.strip()]
+        selected = [x for x in raw if x in providers]
+
+    if not selected:
+        print("❌ 未匹配到有效 provider")
+        return 1
+
+    check_avail = not bool(getattr(args, "no_check", False))
+    timeout = int(getattr(args, "timeout", 10) or 10)
+    ua = (getattr(args, "ua", DEFAULT_UA) or DEFAULT_UA).strip() or DEFAULT_UA
+    max_probe = int(getattr(args, "max_probe", 0) or 0)
+
+    rc_final = 0
+    for idx_p, pname in enumerate(selected, 1):
+        pobj = providers.get(pname)
+        if not pobj:
+            print(f"❌ provider 不存在: {pname}")
+            rc_final = 1
+            continue
+
+        models = pobj.get("models", []) or []
+        mids = []
+        for m in models:
+            mid = m.get("id") if isinstance(m, dict) else str(m)
+            if mid:
+                mids.append(mid)
+
+        print(MENU_SEP)
+        print(f"[{idx_p}/{len(selected)}] provider: {pname}")
+        print(f"模型数: {len(mids)}")
+
+        if not mids:
+            print("(无模型)")
+            continue
+
+        if check_avail:
+            ok_set = set()
+            bad_set = set()
+            probe_ids = mids if max_probe <= 0 else mids[:max_probe]
+            for i, mid in enumerate(probe_ids, 1):
+                succ, _code, _detail = probe_chat_model(
+                    pobj.get("baseUrl", ""),
+                    pobj.get("apiKey", ""),
+                    mid,
+                    timeout=timeout,
+                    ua=ua,
+                )
+                if succ:
+                    ok_set.add(mid)
+                else:
+                    bad_set.add(mid)
+
+            for i, mid in enumerate(mids, 1):
+                if mid in ok_set:
+                    mark = "✅"
+                elif mid in bad_set:
+                    mark = "❌"
+                else:
+                    mark = "➖"
+                print(f"{i}. {mark} {mid}")
+
+            print(f"可用: {len(ok_set)}  不可用: {len(bad_set)}  未检测: {max(0, len(mids)-len(ok_set)-len(bad_set))}")
+            if bad_set:
+                rc_final = 2
+        else:
+            for i, mid in enumerate(mids, 1):
+                print(f"{i}. {mid}")
+
+    print(MENU_SEP)
+    return rc_final
 
 
 def cmd_switch(args):
@@ -1589,18 +1743,53 @@ def menu_loop() -> int:
             continue
 
         if choice == "3":
+            print("当前 provider 列表：")
+            run_action(cmd_list, argparse.Namespace())
+            providers_sel = prompt_text("检测本地已添加API（0=全部；支持 1 2 或 名称；输入s跳过到新API检测；输入q返回）: ", "0", allow_zero_cancel=True)
+            if providers_sel is None:
+                continue
             timeout = prompt_text("超时秒数(默认10，输入q返回): ", "10", allow_zero_cancel=True)
             if timeout is None:
                 continue
             ua = prompt_text(f"User-Agent(默认 {DEFAULT_UA}，输入q返回): ", DEFAULT_UA, allow_zero_cancel=True)
             if ua is None:
                 continue
-            run_action(
-                cmd_check,
-                argparse.Namespace(base_url="", api_key="", timeout=to_int(timeout, 10), ua=ua),
-            )
+
+            skipped_local = str(providers_sel).strip().lower() == "s"
+
+            if not skipped_local:
+                print("\n➡️ 开始检测本地已添加 API...")
+                run_action(
+                    cmd_check,
+                    argparse.Namespace(
+                        base_url="",
+                        api_key="",
+                        providers=providers_sel,
+                        new_api=False,
+                        timeout=to_int(timeout, 10),
+                        ua=ua,
+                    ),
+                )
+            else:
+                print("\n⏭️ 已跳过本地 API 检测")
+
+            if yes_no("是否继续检测新添加 API？", default=True):
+                print("\n➡️ 开始检测新 API...")
+                run_action(
+                    cmd_check,
+                    argparse.Namespace(
+                        base_url="",
+                        api_key="",
+                        providers="0",
+                        new_api=True,
+                        timeout=to_int(timeout, 10),
+                        ua=ua,
+                    ),
+                )
+
             pause_any_key()
             continue
+
 
         if choice == "4":
             validate = yes_no("是否开启 chat 可用性验证(--validate-chat)", default=True)
@@ -1642,10 +1831,7 @@ def menu_loop() -> int:
             providers = prompt_text("要同步的 provider（序号/名称，空=全部，输入q返回）: ", "", allow_zero_cancel=True)
             if providers is None:
                 continue
-            validate = yes_no("是否开启 chat 可用性验证(--validate-chat)", default=True)
-            prune = False
-            if validate:
-                prune = yes_no("是否清理失效模型(--prune)", default=True)
+            print("同步说明：默认仅同步可用模型，并自动移除不可用/失效模型")
             timeout = prompt_text("超时秒数(默认10，输入q返回): ", "10", allow_zero_cancel=True)
             if timeout is None:
                 continue
@@ -1658,8 +1844,8 @@ def menu_loop() -> int:
                 cmd_sync,
                 argparse.Namespace(
                     providers=providers,
-                    validate_chat=validate,
-                    prune=prune,
+                    validate_chat=True,
+                    prune=True,
                     timeout=to_int(timeout, 10),
                     ua=ua,
                     max_probe=to_int(max_probe, 0),
@@ -1682,10 +1868,27 @@ def menu_loop() -> int:
         if choice == "7":
             print("当前 provider 列表：")
             run_action(cmd_list, argparse.Namespace())
-            provider = prompt_text("请输入 provider 序号或名称（输入q返回）: ", "", allow_zero_cancel=True)
+            provider = prompt_text("请输入 provider 序号或名称（支持多个，空格分隔，输入q返回）: ", "", allow_zero_cancel=True)
             if provider is None:
                 continue
-            run_action(cmd_models, argparse.Namespace(provider=provider))
+            check_avail = yes_no("是否检查模型可用性（默认是）", default=True)
+            timeout = prompt_text("检测超时秒数(默认10，输入q返回): ", "10", allow_zero_cancel=True)
+            if timeout is None:
+                continue
+            max_probe = prompt_text("每个provider最多检测模型数(0=全部，默认0): ", "0", allow_zero_cancel=False)
+            ua = prompt_text(f"User-Agent(默认 {DEFAULT_UA}，输入q返回): ", DEFAULT_UA, allow_zero_cancel=True)
+            if ua is None:
+                continue
+            run_action(
+                cmd_models,
+                argparse.Namespace(
+                    provider=provider,
+                    no_check=(not check_avail),
+                    timeout=to_int(timeout, 10),
+                    ua=ua,
+                    max_probe=to_int(max_probe, 0),
+                ),
+            )
             pause_any_key()
             continue
 
@@ -1740,16 +1943,21 @@ def build_parser():
     p_check = sub.add_parser(
         "check",
         aliases=["ck"],
-        help="检测 API 是否可用（支持交互输入）",
+        help="检测 API 可用性（默认检测本地 provider，可检测新 API）",
         formatter_class=argparse.RawTextHelpFormatter,
         epilog=(
             "示例:\n"
-            "  opm check --base-url https://api.xxx.com/v1 --api-key sk-xxxx\n"
+            "  opm check                         # 默认检测本地全部 provider(API)\n"
+            "  opm check --providers \"1 2\"     # 仅检测指定 provider\n"
+            "  opm check --providers demo1 demo2\n"
+            "  opm check --new-api --base-url https://api.xxx.com/v1 --api-key sk-xxxx\n"
             "  opm ck --timeout 12 --ua curl/8.5.0\n"
         ),
     )
-    p_check.add_argument("--base-url", default="", help="例如: https://api.xxx.com/v1；不填则交互输入")
-    p_check.add_argument("--api-key", default="", help="API Key；不填则交互输入")
+    p_check.add_argument("--base-url", default="", help="新 API 模式可用：例如 https://api.xxx.com/v1")
+    p_check.add_argument("--api-key", default="", help="新 API 模式可用：API Key")
+    p_check.add_argument("--providers", nargs="+", default=["0"], help="本地 provider 选择：0=全部；支持序号/名称，可多项")
+    p_check.add_argument("--new-api", action="store_true", help="检测新 API（base-url/api-key）")
     p_check.add_argument("--timeout", type=int, default=10, help="请求超时秒数")
     p_check.add_argument("--ua", default=DEFAULT_UA, help=f"User-Agent，默认 {DEFAULT_UA}")
     p_check.set_defaults(func=cmd_check)
@@ -1833,15 +2041,21 @@ def build_parser():
     p_models = sub.add_parser(
         "models",
         aliases=["md"],
-        help="列出某个 provider 的模型（带序号）",
+        help="列出 provider 模型（支持多个 provider，可检测可用性）",
         formatter_class=argparse.RawTextHelpFormatter,
         epilog=(
             "示例:\n"
             "  opm models --provider demo1\n"
-            "  opm md --provider 1\n"
+            "  opm md --provider \"1 2\"\n"
+            "  opm md --provider \"demo1 demo2\" --no-check\n"
+            "  opm md --provider \"1 2\" --timeout 12 --max-probe 20\n"
         ),
     )
-    p_models.add_argument("--provider", required=True, help="provider 序号或名称")
+    p_models.add_argument("--provider", required=True, help="provider 序号或名称，支持多个，空格分隔")
+    p_models.add_argument("--no-check", action="store_true", help="不检测模型可用性（默认检测）")
+    p_models.add_argument("--timeout", type=int, default=10, help="可用性检测超时秒数，默认10")
+    p_models.add_argument("--ua", default=DEFAULT_UA, help=f"检测 User-Agent，默认 {DEFAULT_UA}")
+    p_models.add_argument("--max-probe", type=int, default=0, help="每个 provider 最多检测多少模型，0=全部")
     p_models.set_defaults(func=cmd_models)
 
     p_switch = sub.add_parser(
