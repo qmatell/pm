@@ -1,4 +1,5 @@
 # openclaw manager 使用说明（README）
+下载脚本
 ```bash
 curl -L -o opm.py "https://raw.githubusercontent.com/qmatell/opm/refs/heads/main/opm.py"
 ```
