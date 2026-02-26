@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 OpenClaw Manager
-v2.0.3
-优化安装/卸载openclaw命令改为流式输出
+v2.0.4
+上个版本流式输出，定义函数搞丢，导致新装脚本加添provider报错name 'load_config' is not defined/ name 'normalize_base_url' is not defined
 功能：
 1. 检测 API 是否可用（check）
 2. 添加 provider 并自动注册该 provider 的全部模型（add）
@@ -135,7 +135,12 @@ def run_cmd_live(cmd, timeout=None):
         return 1, "".join(lines) + f"\n{e}"
 
 
+def load_config():
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
 
+
+def normalize_base_url(url: str) -> str:
     u = url.strip()
     while u.endswith("/"):
         u = u[:-1]
