@@ -208,7 +208,15 @@ def probe_chat_model(base_url: str, api_key: str, model_id: str, timeout: int = 
         return False, 0, str(e)
 
 
-def filter_models_by_chat(base_url: str, api_key: str, model_ids: List[str], timeout: int, ua: str, max_probe: int = 0) -> Tuple[List[str], List[str]]:
+def filter_models_by_chat(
+    base_url: str,
+    api_key: str,
+    model_ids: List[str],
+    timeout: int,
+    ua: str,
+    max_probe: int = 0,
+    progress_prefix: str = "",
+) -> Tuple[List[str], List[str]]:
     """
     Validate model ids by probing /chat/completions.
     max_probe=0 means probe all models.
@@ -217,17 +225,30 @@ def filter_models_by_chat(base_url: str, api_key: str, model_ids: List[str], tim
     ids = model_ids[:]
     if max_probe and max_probe > 0:
         ids = ids[:max_probe]
+
     ok, bad = [], []
-    for mid in ids:
+    total = len(ids)
+    prefix = (progress_prefix or "").strip()
+    if prefix:
+        prefix = prefix + " "
+
+    for i, mid in enumerate(ids, 1):
         succ, code, _ = probe_chat_model(base_url, api_key, mid, timeout=timeout, ua=ua)
         if succ:
             ok.append(mid)
+            print(f"{prefix}{i}/{total} ✅ {mid}")
         else:
             bad.append(mid)
+            c = f" HTTP:{code}" if code else ""
+            print(f"{prefix}{i}/{total} ❌ {mid}{c}")
+
     # if limited probe, keep unprobed models as-is (append after validated ok)
     if max_probe and max_probe > 0 and len(model_ids) > max_probe:
         remaining = model_ids[max_probe:]
+        for mid in remaining:
+            print(f"{prefix}➖ 未检测(按可用保留): {mid}")
         ok.extend(remaining)
+
     return ok, bad
 
 
@@ -450,7 +471,13 @@ def cmd_add(args):
 
     # 始终仅保留 chat/completions 实测可用模型，避免“能列出但调用404”
     model_ids, bad_models = filter_models_by_chat(
-        base_url, api_key, model_ids, timeout=args.timeout, ua=ua, max_probe=args.max_probe
+        base_url,
+        api_key,
+        model_ids,
+        timeout=args.timeout,
+        ua=ua,
+        max_probe=args.max_probe,
+        progress_prefix=f"[{provider}]",
     )
     if bad_models:
         print(f"⚠️ 已过滤 chat 不可用模型: {len(bad_models)}")
@@ -560,6 +587,7 @@ def cmd_sync(args):
             timeout=args.timeout,
             ua=args.ua,
             max_probe=args.max_probe,
+            progress_prefix=f"[{pname}]",
         )
 
         valid_set = {f"{pname}/{x}" for x in ok_ids}
@@ -670,8 +698,9 @@ def cmd_models(args):
             ok_set = set()
             bad_set = set()
             probe_ids = mids if max_probe <= 0 else mids[:max_probe]
+            total_probe = len(probe_ids)
             for i, mid in enumerate(probe_ids, 1):
-                succ, _code, _detail = probe_chat_model(
+                succ, code, _detail = probe_chat_model(
                     pobj.get("baseUrl", ""),
                     pobj.get("apiKey", ""),
                     mid,
@@ -680,17 +709,15 @@ def cmd_models(args):
                 )
                 if succ:
                     ok_set.add(mid)
+                    print(f"{i}/{total_probe} ✅ {mid}")
                 else:
                     bad_set.add(mid)
+                    c = f" HTTP:{code}" if code else ""
+                    print(f"{i}/{total_probe} ❌ {mid}{c}")
 
-            for i, mid in enumerate(mids, 1):
-                if mid in ok_set:
-                    mark = "✅"
-                elif mid in bad_set:
-                    mark = "❌"
-                else:
-                    mark = "➖"
-                print(f"{i}. {mark} {mid}")
+            if max_probe > 0 and len(mids) > max_probe:
+                for mid in mids[max_probe:]:
+                    print(f"➖ 未检测(按可用保留): {mid}")
 
             print(f"可用: {len(ok_set)}  不可用: {len(bad_set)}  未检测: {max(0, len(mids)-len(ok_set)-len(bad_set))}")
             if bad_set:
@@ -1321,10 +1348,14 @@ def gateway_action(action: str) -> int:
         return rc
 
     if action == "restart":
+        # 与“先停止再启动”保持一致：先清理 tmux gateway 会话，再 stop + start
+        run_cmd(["tmux", "kill-session", "-t", "gateway"], check=False, timeout=5)
         _, out1 = run_cmd(["openclaw", "gateway", "stop"], check=False, timeout=12)
         rc2, out2 = run_cmd(["openclaw", "gateway", "start"], check=False, timeout=12)
         time.sleep(3)
-        merged = "\n".join([x.strip() for x in (out1, out2) if x and x.strip()])
+        # 重启后额外做一次状态探测，确保配置已重新加载
+        _, out3 = run_cmd(["openclaw", "gateway", "status"], check=False, timeout=12)
+        merged = "\n".join([x.strip() for x in (out1, out2, out3) if x and x.strip()])
         print(merged.strip())
         return 0 if rc2 == 0 else rc2
 
