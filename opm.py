@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 OpenClaw Manager
-v2.0.2
-修改备份位置，优化删除 __pycache__逻辑
+v2.0.3
+优化安装/卸载openclaw命令改为流式输出
 功能：
 1. 检测 API 是否可用（check）
 2. 添加 provider 并自动注册该 provider 的全部模型（add）
@@ -91,12 +91,51 @@ def run_cmd(cmd, check=True, timeout=None):
     return p.returncode, p.stdout
 
 
-def load_config():
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+def run_cmd_live(cmd, timeout=None):
+    """Run command and stream output in real-time; returns (rc, collected_output)."""
+    start_ts = time.time()
+    try:
+        p = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+    except Exception as e:
+        return 1, str(e)
+
+    lines = []
+    try:
+        while True:
+            line = p.stdout.readline() if p.stdout else ""
+            if line:
+                print(line, end="")
+                lines.append(line)
+            if p.poll() is not None:
+                # 读尽剩余输出
+                if p.stdout:
+                    rest = p.stdout.read() or ""
+                    if rest:
+                        print(rest, end="")
+                        lines.append(rest)
+                break
+            if timeout and (time.time() - start_ts) > timeout:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+                return 124, "".join(lines)
+        return p.returncode, "".join(lines)
+    except Exception as e:
+        try:
+            p.kill()
+        except Exception:
+            pass
+        return 1, "".join(lines) + f"\n{e}"
 
 
-def normalize_base_url(url: str) -> str:
+
     u = url.strip()
     while u.endswith("/"):
         u = u[:-1]
@@ -1197,7 +1236,7 @@ def get_install_status(force: bool = False, probe_latest: bool = False) -> Dict[
 
 def install_openclaw_official() -> int:
     """
-    安装流程（精简版）：
+    安装流程：
     npm install -g openclaw@latest
     openclaw onboard --install-daemon
     gateway stop + start
@@ -1206,18 +1245,28 @@ def install_openclaw_official() -> int:
         print("❌ 未检测到 npm，无法安装 OpenClaw")
         return 1
 
-    print("\n➡️ 开始安装 OpenClaw...")
-    rc1, out1 = run_cmd(["npm", "install", "-g", "openclaw@latest"], check=False)
-    print((out1 or "")[-1200:])
+    print("\n➡️ 开始安装 OpenClaw（实时输出）...")
+    print("➡️ 第1步：npm install -g openclaw@latest")
+    rc1, _out1 = run_cmd_live(["npm", "install", "-g", "openclaw@latest"], timeout=1800)
     if rc1 != 0:
+        if rc1 == 124:
+            print("❌ npm 安装超时（30分钟），请检查网络或 npm 源")
+        else:
+            print("❌ npm 安装失败")
         return rc1
 
-    rc2, out2 = run_cmd(["openclaw", "onboard", "--install-daemon"], check=False)
-    print((out2 or "")[-1200:])
+    print("\n➡️ 第2步：openclaw onboard --install-daemon")
+    rc2, _out2 = run_cmd_live(["openclaw", "onboard", "--install-daemon"], timeout=300)
+    if rc2 != 0:
+        if rc2 == 124:
+            print("❌ onboard 超时（5分钟）")
+        else:
+            print("❌ onboard 失败")
+        return rc2
 
-    # start_gateway 
-    gateway_action("start")
-    return 0 if rc2 == 0 else rc2
+    print("\n➡️ 第3步：启动 gateway")
+    rc3 = gateway_action("start")
+    return 0 if (rc1 == 0 and rc2 == 0 and rc3 == 0) else (rc3 or rc2 or rc1)
 
 
 def check_openclaw_update_message(timeout_sec: int = 8) -> str:
@@ -1244,21 +1293,29 @@ def update_openclaw_official() -> int:
         print("❌ 未检测到 npm，无法更新 OpenClaw")
         return 1
 
-    print("\n➡️ 开始更新 OpenClaw...")
-    rc1, out1 = run_cmd(["npm", "install", "-g", "openclaw@latest"], check=False)
-    print((out1 or "")[-1200:])
+    print("\n➡️ 开始更新 OpenClaw（实时输出）...")
+    rc1, _out1 = run_cmd_live(["npm", "install", "-g", "openclaw@latest"], timeout=1800)
     if rc1 != 0:
+        if rc1 == 124:
+            print("❌ npm 更新超时（30分钟），请检查网络或 npm 源")
+        else:
+            print("❌ npm 更新失败")
         return rc1
 
-    rc2, out2 = run_cmd(["openclaw", "onboard", "--install-daemon"], check=False)
-    print((out2 or "")[-1200:])
+    rc2, _out2 = run_cmd_live(["openclaw", "onboard", "--install-daemon"], timeout=300)
+    if rc2 != 0:
+        if rc2 == 124:
+            print("❌ onboard 超时（5分钟）")
+        else:
+            print("❌ onboard 失败")
+        return rc2
 
-    gateway_action("start")
-    return 0 if rc2 == 0 else rc2
+    rc3 = gateway_action("start")
+    return 0 if (rc1 == 0 and rc2 == 0 and rc3 == 0) else (rc3 or rc2 or rc1)
 
 
 def uninstall_openclaw() -> int:
-    """卸载核心命令：openclaw uninstall + npm uninstall -g openclaw"""
+    """卸载核心命令：openclaw uninstall + npm uninstall -g openclaw（实时输出）"""
     print("\n⚠️ 卸载将移除 OpenClaw CLI 与服务，请谨慎。")
     if not yes_no("确认继续卸载？", default=False):
         print("已取消卸载")
@@ -1267,16 +1324,16 @@ def uninstall_openclaw() -> int:
     rc_final = 0
 
     if command_exists("openclaw"):
-        rc1, out1 = run_cmd(["openclaw", "uninstall"], check=False)
-        print((out1 or "")[-1200:])
+        print("\n➡️ 执行：openclaw uninstall")
+        rc1, _out1 = run_cmd_live(["openclaw", "uninstall"], timeout=300)
         if rc1 != 0:
             rc_final = rc1
     else:
         print("ℹ️ 未检测到 openclaw 命令，跳过 openclaw uninstall")
 
     if command_exists("npm"):
-        rc2, out2 = run_cmd(["npm", "uninstall", "-g", "openclaw"], check=False)
-        print((out2 or "")[-1200:])
+        print("\n➡️ 执行：npm uninstall -g openclaw")
+        rc2, _out2 = run_cmd_live(["npm", "uninstall", "-g", "openclaw"], timeout=900)
         if rc2 != 0:
             rc_final = rc2
     else:
