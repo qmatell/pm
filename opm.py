@@ -45,7 +45,7 @@ DEFAULT_UA = "curl/8.5.0"
 THIS_SCRIPT = os.path.abspath(__file__)
 MENU_SEP = "=" * 33
 SELF_REPO_URL = "https://github.com/qmatell/opm.git"
-SELF_RAW_URL = "https://raw.githubusercontent.com/qmatell/opm/main/opm"
+SELF_RAW_URL = "https://raw.githubusercontent.com/qmatell/opm/main/opm.py"
 SELF_COMMIT_API_URL = "https://api.github.com/repos/qmatell/opm/commits/main"
 MENU_STATUS = {
     "openclaw_ver": "检测中...",
