@@ -1,13 +1,15 @@
 # provider_manager.py 使用说明（README）
-
+从github上面下载脚本，放到随便一个目录里面，进入该目录，./opm.py就行
 ## ⚡ 最短速查（10 秒上手）
 
 ```bash
 # 1) 进入数字菜单（推荐）
-python3 /home/script/jiance/provider_manager.py
+./opm.py
+如果没有权限就chmod +x ./opm.py
+进入后使用9创建别名，默认是opm，创建别名后任何地方opm都能唤出
 
 # 2) 看 CLI 总帮助
-python3 /home/script/jiance/provider_manager.py --cli-help
+/opm.py --cli-help
 # 或（已装别名时）
 opm --cli-help
 
