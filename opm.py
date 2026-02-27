@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 OpenClaw Manager
-v2.0.4
-上个版本流式输出，定义函数搞丢，导致新装脚本加添provider报错name 'load_config' is not defined/ name 'normalize_base_url' is not defined
+v2.0.5
+增加node环境安装 增强session切换，修复备份位置
 功能：
 1. 检测 API 是否可用（check）
 2. 添加 provider 并自动注册该 provider 的全部模型（add）
@@ -43,7 +43,7 @@ from typing import Dict, List, Tuple
 
 CONFIG_PATH = "/root/.openclaw/openclaw.json"
 DEFAULT_UA = "curl/8.5.0"
-THIS_SCRIPT = os.path.abspath(__file__)
+THIS_SCRIPT = os.path.realpath(__file__)
 MENU_SEP = "=" * 33
 SELF_REPO_URL = "https://github.com/qmatell/opm.git"
 SELF_RAW_URL = "https://raw.githubusercontent.com/qmatell/opm/main/opm.py"
@@ -852,40 +852,57 @@ def cmd_switch(args):
 
     # 可选：同步切换当前会话模型
     if args.session:
-        try:
-            rc, out = run_cmd(["openclaw", "sessions", "--json"], check=True)
-            data = json.loads(out)
-            sessions = data.get("sessions", []) if isinstance(data, dict) else []
-            if not sessions:
-                print("⚠️ 未找到会话，跳过会话切换")
+        rc, out = run_cmd(["openclaw", "sessions", "--json"], check=False, timeout=20)
+        txt = (out or "").strip()
+        if rc != 0 or not txt:
+            print(f"⚠️ 会话切换跳过：sessions 命令失败或无输出 (rc={rc})")
+        else:
+            try:
+                data = json.loads(txt)
+            except Exception:
+                preview = " ".join(txt.splitlines()[:3])[:300]
+                print(f"⚠️ 会话切换跳过：sessions 返回非 JSON：{preview or 'empty'}")
             else:
-                latest = max(sessions, key=lambda s: s.get("updatedAt", 0))
-                sid = latest.get("sessionId")
-                if not sid:
-                    print("⚠️ 未找到 sessionId，跳过会话切换")
+                sessions = data.get("sessions", []) if isinstance(data, dict) else []
+                if not sessions:
+                    print("⚠️ 未找到会话，跳过会话切换")
                 else:
-                    # 尝试切换并校验（最多 2 次）
-                    ok = False
-                    for attempt in (1, 2):
-                        run_cmd(["openclaw", "agent", "--session-id", sid, "--message", f"/model {target}", "--timeout", "60"], check=False)
-                        time.sleep(1)
-                        try:
-                            _, out2 = run_cmd(["openclaw", "sessions", "--json"], check=True)
-                            data2 = json.loads(out2)
+                    latest = max(sessions, key=lambda s: s.get("updatedAt", 0))
+                    sid = latest.get("sessionId")
+                    if not sid:
+                        print("⚠️ 未找到 sessionId，跳过会话切换")
+                    else:
+                        # 尝试切换并校验（最多 2 次）
+                        ok = False
+                        cur = "unknown"
+                        for attempt in (1, 2):
+                            run_cmd(
+                                [
+                                    "openclaw", "agent", "--session-id", sid,
+                                    "--message", f"/model {target}", "--timeout", "60",
+                                ],
+                                check=False,
+                                timeout=70,
+                            )
+                            time.sleep(1)
+                            rc2, out2 = run_cmd(["openclaw", "sessions", "--json"], check=False, timeout=20)
+                            txt2 = (out2 or "").strip()
+                            if rc2 != 0 or not txt2:
+                                continue
+                            try:
+                                data2 = json.loads(txt2)
+                            except Exception:
+                                continue
                             sessions2 = data2.get("sessions", []) if isinstance(data2, dict) else []
                             latest2 = max(sessions2, key=lambda s: s.get("updatedAt", 0)) if sessions2 else {}
                             cur = f"{latest2.get('modelProvider','')}/{latest2.get('model','')}".strip("/")
                             if cur == target:
                                 ok = True
                                 break
-                        except Exception:
-                            pass
-                    if ok:
-                        print(f"✅ 当前会话已切换为: {target}")
-                    else:
-                        print(f"⚠️ 会话切换未生效，当前仍为: {cur if 'cur' in locals() else 'unknown'}")
-        except Exception as e:
-            print(f"⚠️ 会话切换失败: {e}")
+                        if ok:
+                            print(f"✅ 当前会话已切换为: {target}")
+                        else:
+                            print(f"⚠️ 会话切换未生效，当前仍为: {cur}")
 
     if not args.no_restart:
         restart_gateway()
@@ -1239,6 +1256,73 @@ def get_install_status(force: bool = False, probe_latest: bool = False) -> Dict[
     }
 
 
+def ensure_node_env_for_openclaw() -> int:
+    """检查 node 环境；若缺失或版本不满足则安装 nvm + Node LTS。"""
+    major = -1
+    if command_exists("node"):
+        rc_v, out_v = run_cmd(["node", "-v"], check=False, timeout=6)
+        txt = (out_v or "").strip()
+        m = re.search(r"v?(\d+)", txt)
+        if rc_v == 0 and m:
+            major = int(m.group(1))
+
+    if major > 22:
+        rc_n, out_n = run_cmd(["node", "-v"], check=False, timeout=6)
+        rc_p, out_p = run_cmd(["npm", "-v"], check=False, timeout=6)
+        print("✅ node环境具备，请安装openclaw")
+        if rc_n == 0:
+            print(f"node版本: {(out_n or '').strip()}")
+        if rc_p == 0:
+            print(f"npm版本: {(out_p or '').strip()}")
+        return 0
+
+    print("➡️ 未检测到可用 node(>22)，开始安装 nvm + Node LTS（实时输出）...")
+
+    rc1, _ = run_cmd_live(
+        [
+            "bash",
+            "-lc",
+            "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash",
+        ],
+        timeout=600,
+    )
+    if rc1 != 0:
+        print("❌ nvm 安装失败")
+        return rc1
+
+    nvm_prefix = 'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"; '
+
+    rc2, _ = run_cmd_live(["bash", "-lc", nvm_prefix + "nvm install --lts"], timeout=1800)
+    if rc2 != 0:
+        print("❌ nvm install --lts 失败")
+        return rc2
+
+    rc3, _ = run_cmd_live(["bash", "-lc", nvm_prefix + "nvm use --lts"], timeout=120)
+    if rc3 != 0:
+        print("❌ nvm use --lts 失败")
+        return rc3
+
+    rc4, _ = run_cmd_live(["bash", "-lc", nvm_prefix + "nvm alias default 'lts/*'"], timeout=120)
+    if rc4 != 0:
+        print("❌ nvm alias default lts/* 失败")
+        return rc4
+
+    rc5, out_node = run_cmd(["bash", "-lc", nvm_prefix + "node -v"], check=False, timeout=10)
+    rc6, out_npm = run_cmd(["bash", "-lc", nvm_prefix + "npm -v"], check=False, timeout=10)
+
+    if rc5 == 0:
+        print(f"node版本: {(out_node or '').strip()}")
+    else:
+        print("⚠️ 未能读取 node 版本")
+    if rc6 == 0:
+        print(f"npm版本: {(out_npm or '').strip()}")
+    else:
+        print("⚠️ 未能读取 npm 版本")
+
+    print("✅ node环境安装成功")
+    return 0
+
+
 def install_openclaw_official() -> int:
     """
     安装流程：
@@ -1464,14 +1548,15 @@ def menu_install_update_status() -> int:
         print(f"最新版本: {latest if latest else '未知（npm 不可用或网络问题）'}")
         print(f"运行状态: {runtime if runtime else '未知'}")
         print(sep)
-        print("1. 安装 OpenClaw")
-        print("2. 启动")
-        print("3. 停止")
-        print("4. 重启")
-        print("5. 状态日志")
-        print("6. 检测更新")
-        print("7. 卸载")
-        print("8. 检测/修复")
+        print("1. node环境安装")
+        print("2. 安装 OpenClaw")
+        print("3. 启动")
+        print("4. 停止")
+        print("5. 重启")
+        print("6. 状态日志")
+        print("7. 检测更新")
+        print("8. 卸载")
+        print("9. 检测/修复")
         print("q. 返回主菜单")
         print(sep)
 
@@ -1480,6 +1565,14 @@ def menu_install_update_status() -> int:
             return 0
 
         if c == "1":
+            rc = ensure_node_env_for_openclaw()
+            print("✅ node环境检查/安装完成" if rc == 0 else "❌ node环境检查/安装失败")
+            st = get_install_status(force=True, probe_latest=True)
+            primary = get_primary_model()
+            pause_any_key()
+            continue
+
+        if c == "2":
             if cur:
                 print(f"✅ 已安装 OpenClaw，版本: {cur}")
             else:
@@ -1491,7 +1584,7 @@ def menu_install_update_status() -> int:
             pause_any_key()
             continue
 
-        if c == "2":
+        if c == "3":
             rc = gateway_action("start")
             print("✅ 启动成功" if rc == 0 else "❌ 启动失败")
             st = get_install_status(force=True, probe_latest=True)
@@ -1499,7 +1592,7 @@ def menu_install_update_status() -> int:
             pause_any_key()
             continue
 
-        if c == "3":
+        if c == "4":
             rc = gateway_action("stop")
             print("✅ 停止成功" if rc == 0 else "❌ 停止失败")
             st = get_install_status(force=True, probe_latest=True)
@@ -1507,7 +1600,7 @@ def menu_install_update_status() -> int:
             pause_any_key()
             continue
 
-        if c == "4":
+        if c == "5":
             rc = gateway_action("restart")
             print("✅ 重启成功" if rc == 0 else "❌ 重启失败")
             st = get_install_status(force=True, probe_latest=True)
@@ -1515,7 +1608,7 @@ def menu_install_update_status() -> int:
             pause_any_key()
             continue
 
-        if c == "5":
+        if c == "6":
             rc = gateway_action("status")
             print("✅ 状态日志查看成功" if rc == 0 else "❌ 状态日志查看失败")
             st = get_install_status(force=True, probe_latest=True)
@@ -1523,7 +1616,7 @@ def menu_install_update_status() -> int:
             pause_any_key()
             continue
 
-        if c == "6":
+        if c == "7":
             msg = check_openclaw_update_message(timeout_sec=8)
             print(msg)
             # 保持原能力：如果有新版本可选择更新
@@ -1535,7 +1628,7 @@ def menu_install_update_status() -> int:
             pause_any_key()
             continue
 
-        if c == "7":
+        if c == "8":
             rc = uninstall_openclaw()
             print("✅ 卸载完成" if rc == 0 else "❌ 卸载失败")
             st = get_install_status(force=True, probe_latest=True)
@@ -1543,7 +1636,7 @@ def menu_install_update_status() -> int:
             pause_any_key()
             continue
 
-        if c == "8":
+        if c == "9":
             rc = openclaw_doctor_fix()
             print("✅ 健康检测/修复完成" if rc == 0 else "❌ 健康检测/修复失败")
             st = get_install_status(force=True, probe_latest=True)
